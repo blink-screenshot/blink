@@ -117,8 +117,9 @@ mod tests {
                                 let code: String = chars.by_ref().skip(1).take_while(|c| *c != '}').collect();
                                 s.push(char::from_u32(u32::from_str_radix(&code, 16).unwrap()).unwrap());
                             }
-                            Some('\n') => {
-                                // Line continuation: skip the leading whitespace.
+                            // Line continuation (LF, or CRLF in a Windows checkout): skip the
+                            // line end and the leading whitespace, as the compiler does.
+                            Some('\n' | '\r') => {
                                 let rest: String = chars.clone().collect();
                                 let skip = rest.len() - rest.trim_start().len();
                                 for _ in 0..rest[..skip].chars().count() {
