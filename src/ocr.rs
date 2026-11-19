@@ -396,7 +396,22 @@ pub fn read_with(engine: &dyn Engine, bgra: &[u8], w: u32, h: u32) -> Result<Pag
     let mut page = Page::default();
     for band in bands(sh, max) {
         let part = &img[(band.top * sw * 4) as usize..(band.bottom * sw * 4) as usize];
-        let read = engine.read(part, sw, band.bottom - band.top)?;
+        let bh = band.bottom - band.top;
+        let mut read = engine.read(part, sw, bh)?;
+        // OCR engines are made for dark text on a light background. Light text on a dark
+        // background (dark mode, terminals, code editors) is read far better inverted, so a
+        // band with a large dark area is read a second time inverted, and the lines that
+        // reading adds are kept.
+        if dark_share(part) >= DARK_SHARE_TO_INVERT {
+            let inverted: Vec<u8> =
+                part.chunks_exact(4).flat_map(|p| [255 - p[0], 255 - p[1], 255 - p[2], p[3]]).collect();
+            for line in engine.read(&inverted, sw, bh)?.lines {
+                let r = line.rect();
+                if !read.lines.iter().any(|l| overlaps(&l.rect(), &r)) {
+                    read.lines.push(line);
+                }
+            }
+        }
         for mut line in read.lines {
             // A line in the overlap of two bands is read twice: keep it in the band that has
             // its middle in its own part.
@@ -413,6 +428,27 @@ pub fn read_with(engine: &dyn Engine, bgra: &[u8], w: u32, h: u32) -> Result<Pag
     }
     page.lines.retain(|l| !l.words.is_empty());
     Ok(page)
+}
+
+/// The share of dark pixels from which an image is also read inverted.
+const DARK_SHARE_TO_INVERT: f32 = 0.2;
+
+/// The share of dark pixels in a BGRA image (every 7th pixel is enough to tell).
+fn dark_share(bgra: &[u8]) -> f32 {
+    let (mut dark, mut all) = (0u32, 0u32);
+    for p in bgra.chunks_exact(4).step_by(7) {
+        let luma = (p[2] as u32 * 299 + p[1] as u32 * 587 + p[0] as u32 * 114) / 1000;
+        dark += (luma < 96) as u32;
+        all += 1;
+    }
+    dark as f32 / all.max(1) as f32
+}
+
+/// Whether two line boxes are mostly the same place (the same line read twice).
+fn overlaps(a: &Bounds, b: &Bounds) -> bool {
+    let w = a.right().min(b.right()) - a.x.max(b.x);
+    let h = a.bottom().min(b.bottom()) - a.y.max(b.y);
+    w > 0.0 && h > 0.0 && w * h > 0.5 * (a.w * a.h).min(b.w * b.h)
 }
 
 /// A horizontal strip of the image that is read on its own: rows `top..bottom`; lines whose
@@ -543,8 +579,9 @@ pub(crate) mod tests {
         }
     }
 
-    /// Pretends to read: returns one word per 100-pixel row whose first pixel is not black,
-    /// so tests can check where words end up after scaling and banding.
+    /// Pretends to read: returns one word per row that starts dark ("ink") and ends light
+    /// ("paper"), so tests can check where words end up after scaling and banding, and that
+    /// light text on a dark background is only read inverted, like a real engine prefers.
     struct Fake {
         max: u32,
         calls: std::cell::Cell<u32>,
@@ -559,7 +596,8 @@ pub(crate) mod tests {
             self.calls.set(self.calls.get() + 1);
             let mut page = Page::default();
             for y in 0..h {
-                if bgra[(y * w * 4) as usize] != 0 {
+                let row = &bgra[(y * w * 4) as usize..((y + 1) * w * 4) as usize];
+                if row[0] < 128 && row[row.len() - 4] >= 128 {
                     page.lines.push(Line { words: vec![word(&format!("row{y}"), 0.0, y as f32, 20.0, 10.0)] });
                 }
             }
@@ -571,11 +609,11 @@ pub(crate) mod tests {
     fn tall_images_are_read_in_bands_without_duplicates() {
         // 500 x 6000: too tall for the engine, too big to enlarge.
         let (w, h) = (500u32, 6000u32);
-        let mut img = vec![0u8; (w * h * 4) as usize];
+        let mut img = vec![255u8; (w * h * 4) as usize];
         let marks = [0u32, 1990, 2500, 4100, 5900];
         for y in marks {
             for dy in 0..10 {
-                img[((y + dy) * w * 4) as usize] = 255;
+                img[((y + dy) * w * 4) as usize] = 0;
             }
         }
         let engine = Fake { max: 2600, calls: Default::default() };
@@ -595,10 +633,10 @@ pub(crate) mod tests {
     #[test]
     fn small_images_are_enlarged_and_positions_map_back() {
         let (w, h) = (300u32, 200u32);
-        let mut img = vec![0u8; (w * h * 4) as usize];
-        for x in 0..w {
+        let mut img = vec![255u8; (w * h * 4) as usize];
+        for x in 0..w / 2 {
             for dy in 0..4 {
-                img[(((100 + dy) * w + x) * 4) as usize] = 255;
+                img[(((100 + dy) * w + x) * 4) as usize] = 0;
             }
         }
         assert_eq!(upscale_for(w, h, 10000), 2.0);
@@ -608,6 +646,56 @@ pub(crate) mod tests {
         assert!(!page.lines.is_empty());
         assert!(page.lines.iter().all(|l| (98.0..106.0).contains(&l.rect().y)));
         assert!(page.lines.iter().all(|l| (l.rect().w - 10.0).abs() < 0.01));
+    }
+
+    /// A BGRA image of `w` x `h` in `paper`, with "text" rows `ink` on the left half.
+    fn rows(w: u32, h: u32, paper: u8, ink: u8, text_rows: &[u32]) -> Vec<u8> {
+        let mut img = vec![paper; (w * h * 4) as usize];
+        for &y in text_rows {
+            for x in 0..w / 2 {
+                let i = ((y * w + x) * 4) as usize;
+                img[i..i + 3].copy_from_slice(&[ink; 3]);
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn light_text_on_dark_is_read_inverted() {
+        // Dark mode: light text on a near-black background, like a code editor.
+        let (w, h) = (3000u32, 1000u32);
+        let img = rows(w, h, 31, 235, &[200, 600]);
+        let engine = Fake { max: 10000, calls: Default::default() };
+        let page = read_with(&engine, &img, w, h).unwrap();
+        assert_eq!(engine.calls.get(), 2);
+        let ys: Vec<f32> = page.lines.iter().map(|l| l.rect().y).collect();
+        assert_eq!(ys, vec![200.0, 600.0]);
+    }
+
+    #[test]
+    fn light_images_are_read_once() {
+        let (w, h) = (3000u32, 1000u32);
+        let img = rows(w, h, 250, 20, &[200, 600]);
+        let engine = Fake { max: 10000, calls: Default::default() };
+        let page = read_with(&engine, &img, w, h).unwrap();
+        assert_eq!(engine.calls.get(), 1);
+        assert_eq!(page.lines.len(), 2);
+    }
+
+    #[test]
+    fn a_dark_area_on_a_light_page_adds_its_lines_once() {
+        // Top half a light page with dark text, bottom half a dark code block with light text.
+        let (w, h) = (3000u32, 1000u32);
+        let mut img = rows(w, h, 250, 20, &[100, 300]);
+        let dark = rows(w, 500, 31, 235, &[200]);
+        img[(500 * w * 4) as usize..].copy_from_slice(&dark);
+        let engine = Fake { max: 10000, calls: Default::default() };
+        let page = read_with(&engine, &img, w, h).unwrap();
+        let mut ys: Vec<f32> = page.lines.iter().map(|l| l.rect().y).collect();
+        ys.sort_by(f32::total_cmp);
+        // The page's lines come from the normal reading, the code block's from the inverted
+        // one, each exactly once.
+        assert_eq!(ys, vec![100.0, 300.0, 700.0]);
     }
 
     #[test]
