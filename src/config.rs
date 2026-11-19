@@ -97,6 +97,8 @@ pub struct Hotkeys {
     pub scrolling: Hotkey,
     /// Small menu to pick the capture type.
     pub picker: Hotkey,
+    /// Copy the text you point at (the overlay in text mode).
+    pub text: Hotkey,
 }
 
 impl Default for Hotkeys {
@@ -107,18 +109,20 @@ impl Default for Hotkeys {
             active_window: Hotkey::new(false, true, false, VK_SNAPSHOT),
             scrolling: Hotkey::new(true, false, true, VK_SNAPSHOT),
             picker: Hotkey::new(true, false, false, VK_SNAPSHOT),
+            text: Hotkey::new(true, true, false, VK_SNAPSHOT),
         }
     }
 }
 
 impl Hotkeys {
     /// (stable id, display name, hotkey) for every capture hotkey.
-    pub fn list(&self) -> [(&'static str, &'static str, Hotkey); 5] {
+    pub fn list(&self) -> [(&'static str, &'static str, Hotkey); 6] {
         [
             ("region", crate::i18n::t("Region / window"), self.region),
             ("fullscreen", crate::i18n::t("Full screen"), self.fullscreen),
             ("active_window", crate::i18n::t("Active window"), self.active_window),
             ("scrolling", crate::i18n::t("Scrolling page"), self.scrolling),
+            ("text", crate::i18n::t("Copy text from the screen"), self.text),
             ("picker", crate::i18n::t("Capture menu"), self.picker),
         ]
     }
@@ -129,6 +133,7 @@ impl Hotkeys {
             "active_window" => Some(&mut self.active_window),
             "scrolling" => Some(&mut self.scrolling),
             "picker" => Some(&mut self.picker),
+            "text" => Some(&mut self.text),
             _ => None,
         }
     }

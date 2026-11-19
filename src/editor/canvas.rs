@@ -1,5 +1,6 @@
 //! The drawing surface: view transform, mouse interaction and live previews.
 
+use super::textsel::{self, to_rect};
 use super::{ui, Drag, EditorApp, Handle, TextEditing, Tool};
 use crate::annot::{arrow_geometry, callout_outline, push_point, shape_outline, Annotation, HeadShape, Kind, Style};
 use crate::render::{
@@ -138,9 +139,13 @@ pub fn show(app: &mut EditorApp, ctx: &egui::Context) {
             if resp.drag_stopped_by(PointerButton::Primary) {
                 end_drag(app);
             }
-            if resp.double_clicked_by(PointerButton::Primary) {
+            if resp.triple_clicked_by(PointerButton::Primary) {
                 if let Some(p) = pointer {
-                    double_click(app, v.to_img(p), zoom);
+                    triple_click(app, v.to_img(p), &v, tool);
+                }
+            } else if resp.double_clicked_by(PointerButton::Primary) {
+                if let Some(p) = pointer {
+                    double_click(app, v.to_img(p), zoom, &v, tool);
                 }
             } else if resp.clicked_by(PointerButton::Primary) {
                 if let Some(p) = pointer {
@@ -175,8 +180,86 @@ pub fn show(app: &mut EditorApp, ctx: &egui::Context) {
                 Rect::from_two_pos(start, cur),
             );
         }
+        paint_text_layer(app, &clip, &v);
         text_editor(app, ctx, &v);
+        // Floating parts: reading, the private info panel, Copy / Hide at a selection.
+        let busy = app.ocr_running() && (app.tool == Tool::SelectText || app.after_ocr.is_some());
+        if busy {
+            textsel::reading_pill(ctx, canvas);
+        }
+        if app.privacy.is_none() && app.tool == Tool::SelectText && matches!(app.drag, Drag::None) {
+            let rects = app.page().map(|p| p.selection_rects(&app.text_sel)).unwrap_or_default();
+            if let Some(all) = rects.iter().map(|r| v.rect_to_screen(to_rect(r))).reduce(|a, b| a.union(b)) {
+                if canvas.intersects(all) {
+                    textsel::selection_actions(app, ctx, all, canvas);
+                }
+            }
+        }
     });
+}
+
+/// The read text (text tool): every word faintly, the selection clearly, the selection box;
+/// and the suggestions of "Find private info" (with any tool).
+fn paint_text_layer(app: &EditorApp, p: &Painter, v: &View) {
+    // The redaction tool: what a click would hide.
+    if app.tool == Tool::Redact && !app.ctrl_select && matches!(app.drag, Drag::None) {
+        if let Some(h) = app.hover.filter(|h| hit_test(app, *h, v.zoom).is_none()) {
+            if let Some((b, kind)) = app.redact_target(h, v.zoom) {
+                let r = v.rect_to_screen(to_rect(&b));
+                p.rect_filled(r, 2.0, theme::ACCENT.gamma_multiply(0.22));
+                p.rect_stroke(r, 2.0, Stroke::new(1.5_f32, theme::ACCENT), StrokeKind::Outside);
+                if let Some(kind) = kind {
+                    let galley = p.layout_no_wrap(kind.name().to_string(), FontId::proportional(11.0), theme::INK);
+                    let tag = Rect::from_min_size(
+                        pos2(r.left() - 2.0, r.top() - galley.size().y - 6.0),
+                        galley.size() + vec2(8.0, 3.0),
+                    );
+                    p.rect_filled(tag, 3.0, theme::ACCENT);
+                    p.galley(tag.min + vec2(4.0, 1.5), galley, theme::INK);
+                }
+            }
+        }
+    }
+    if let (Tool::SelectText, Some(page)) = (app.tool, app.page()) {
+        for (i, _, w) in page.words() {
+            if app.word_visible(i) {
+                p.rect_filled(v.rect_to_screen(to_rect(&w.rect)).expand(1.0), 2.0, theme::ACCENT.gamma_multiply(0.10));
+            }
+        }
+        for r in page.selection_rects(&app.text_sel) {
+            p.rect_filled(v.rect_to_screen(to_rect(&r)).expand(1.5), 2.0, theme::ACCENT.gamma_multiply(0.38));
+        }
+        if let Drag::TextMarquee { start, cur } = app.drag {
+            let r = v.rect_to_screen(Rect::from_two_pos(start, cur));
+            p.rect_filled(r, 0.0, theme::ACCENT.gamma_multiply(0.06));
+            p.rect_stroke(r, 0.0, Stroke::new(1.0_f32, theme::ACCENT), StrokeKind::Inside);
+        }
+    }
+    if let Some(priv_) = &app.privacy {
+        for (f, on) in priv_.findings.iter().zip(&priv_.on) {
+            let r = v.rect_to_screen(to_rect(&f.rect));
+            if *on {
+                p.rect_filled(r, 2.0, theme::ACCENT.gamma_multiply(0.30));
+                p.rect_stroke(r, 2.0, Stroke::new(2.0_f32, theme::ACCENT), StrokeKind::Outside);
+            } else {
+                p.rect_stroke(r, 2.0, Stroke::new(1.5_f32, Color32::from_gray(150)), StrokeKind::Outside);
+            }
+            // What it is, above the box, for the one under the mouse (labels on all of them
+            // would cover the text around them).
+            if !app.hover.is_some_and(|h| to_rect(&f.rect).contains(h)) {
+                continue;
+            }
+            let font = FontId::proportional(11.0);
+            let galley =
+                p.layout_no_wrap(f.kind.name().to_string(), font, if *on { theme::INK } else { Color32::WHITE });
+            let tag = Rect::from_min_size(
+                pos2(r.left() - 2.0, r.top() - galley.size().y - 6.0),
+                galley.size() + vec2(8.0, 3.0),
+            );
+            p.rect_filled(tag, 3.0, if *on { theme::ACCENT } else { Color32::from_gray(90) });
+            p.galley(tag.min + vec2(4.0, 1.5), galley, Color32::WHITE);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -297,6 +380,20 @@ fn begin_drag(app: &mut EditorApp, v: &View, start_screen: Pos2, tool: Tool) {
             }
         }
         Tool::Crop => app.drag = Drag::Crop { start, cur: start },
+        Tool::SelectText => {
+            let slack = 3.0 / v.zoom;
+            let at = app.page().and_then(|p| p.word_at(start.x, start.y, slack)).filter(|i| app.word_visible(*i));
+            match at {
+                Some(i) => {
+                    app.text_sel = vec![i];
+                    app.drag = Drag::TextFlow { anchor: i };
+                }
+                None => {
+                    app.text_sel.clear();
+                    app.drag = Drag::TextMarquee { start, cur: start };
+                }
+            }
+        }
         Tool::Step => {
             let id = add_step(app, start);
             app.drag = Drag::Move { id, last: start, moved: true };
@@ -442,11 +539,29 @@ fn update_drag(app: &mut EditorApp, cur: Pos2, shift: bool) {
             }
         }
         Drag::Crop { start, .. } => app.drag = Drag::Crop { start, cur },
+        Drag::TextFlow { anchor } => {
+            if let Some(end) = app.page().and_then(|p| p.nearest_word(cur.x, cur.y)) {
+                let (a, b) = (anchor.min(end), anchor.max(end));
+                app.text_sel = (a..=b).filter(|i| app.word_visible(*i)).collect();
+            }
+        }
+        Drag::TextMarquee { start, .. } => {
+            let r = Rect::from_two_pos(start, cur);
+            let b = crate::ocr::Bounds::new(r.min.x, r.min.y, r.width(), r.height());
+            let words = app.page().map(|p| p.words_in(&b)).unwrap_or_default();
+            app.text_sel = words.into_iter().filter(|i| app.word_visible(*i)).collect();
+            app.drag = Drag::TextMarquee { start, cur };
+        }
         Drag::None | Drag::Pan => {}
     }
 }
 
 fn end_drag(app: &mut EditorApp) {
+    if matches!(app.drag, Drag::TextFlow { .. } | Drag::TextMarquee { .. }) {
+        // The selection stays; nothing in the image changed.
+        app.drag = Drag::None;
+        return;
+    }
     match std::mem::replace(&mut app.drag, Drag::None) {
         Drag::Create { id, start } => {
             if let Some(i) = app.find(id) {
@@ -506,7 +621,15 @@ fn end_drag(app: &mut EditorApp) {
 fn click(app: &mut EditorApp, v: &View, screen: Pos2, tool: Tool) {
     app.finish_text_edit();
     let p = v.to_img(screen);
+    // A suggested redaction is turned off (or on again) by clicking it, with any tool.
+    if app.toggle_finding_at(p) {
+        return;
+    }
     match tool {
+        Tool::SelectText => {
+            let at = app.page().and_then(|pg| pg.word_at(p.x, p.y, 3.0 / v.zoom)).filter(|i| app.word_visible(*i));
+            app.text_sel = at.into_iter().collect();
+        }
         Tool::Callout | Tool::Emoji => {
             let same = |a: &Annotation| Tool::for_kind(&a.kind) == tool;
             if let Some(id) = hit_test(app, p, v.zoom).filter(|id| app.get(*id).is_some_and(same)) {
@@ -548,11 +671,38 @@ fn click(app: &mut EditorApp, v: &View, screen: Pos2, tool: Tool) {
         Tool::Step => {
             add_step(app, p);
         }
+        Tool::Redact => {
+            // An existing redaction is selected; else the word or private item there is hidden.
+            app.selected = hit_test(app, p, v.zoom);
+            if app.selected.is_none() {
+                if let Some((b, _)) = app.redact_target(p, v.zoom) {
+                    app.redact_bounds(b);
+                }
+            }
+        }
         _ => app.selected = hit_test(app, p, v.zoom),
     }
 }
 
-fn double_click(app: &mut EditorApp, p: Pos2, zoom: f32) {
+/// The words of the line (`paragraph`: of the paragraph) at `p`, in the text tool.
+fn select_line_at(app: &mut EditorApp, p: Pos2, v: &View, paragraph: bool) {
+    let Some(page) = app.page() else { return };
+    let Some(li) = page.line_at(p.x, p.y, 3.0 / v.zoom) else { return };
+    let lines = if paragraph { page.paragraph(li) } else { li..=li };
+    let words: Vec<usize> = lines.flat_map(|l| page.line_words(l)).collect();
+    app.text_sel = words.into_iter().filter(|i| app.word_visible(*i)).collect();
+}
+
+fn triple_click(app: &mut EditorApp, p: Pos2, v: &View, tool: Tool) {
+    if tool == Tool::SelectText {
+        select_line_at(app, p, v, true);
+    }
+}
+
+fn double_click(app: &mut EditorApp, p: Pos2, zoom: f32, v: &View, tool: Tool) {
+    if tool == Tool::SelectText {
+        return select_line_at(app, p, v, false);
+    }
     if let Some(id) = hit_test(app, p, zoom) {
         if app.get(id).is_some_and(|a| a.kind.text().is_some()) {
             app.finish_text_edit();
@@ -597,6 +747,24 @@ fn set_cursor(app: &EditorApp, ctx: &egui::Context, v: &View, pointer: Option<Po
             }
         }
         Tool::Text | Tool::Callout => CursorIcon::Text,
+        Tool::SelectText => {
+            let q = v.to_img(p);
+            if app.ocr_running() {
+                CursorIcon::Progress
+            } else if app.page().and_then(|pg| pg.word_at(q.x, q.y, 3.0 / v.zoom)).is_some() {
+                CursorIcon::Text
+            } else {
+                CursorIcon::Crosshair
+            }
+        }
+        Tool::Redact => {
+            let q = v.to_img(p);
+            if hit_test(app, q, v.zoom).is_none() && app.redact_target(q, v.zoom).is_some() {
+                CursorIcon::PointingHand
+            } else {
+                CursorIcon::Crosshair
+            }
+        }
         _ => CursorIcon::Crosshair,
     };
     ctx.set_cursor_icon(icon);

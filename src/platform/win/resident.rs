@@ -8,9 +8,11 @@ use super::capture::{
 use super::kbhook::{self, FORCED_HOTKEY_MSG};
 use super::tray_icons::{self, Icon};
 use super::{cursor_pos, monitor_at, overlay, scroll, toast, wide, CAPTURE_MESSAGE, RELOAD_MESSAGE, RESIDENT_CLASS};
+use crate::capture_bar::Mode;
 use crate::config::{config_path, Config, Hotkey, HotkeyState, HotkeyStatus, HotkeyStatusEntry};
 use crate::i18n::{t, tf};
 use crate::imageio;
+use crate::ocr::{self, OcrError};
 use crate::toast_xml::Button;
 use core::ffi::c_void;
 use eframe::egui::Color32;
@@ -80,6 +82,13 @@ enum Action {
     SaveCapture,
     /// Asks where to save the screenshot of the current notification (not a menu item).
     SaveCaptureAs,
+    /// Copies the text you point at (the overlay in text mode).
+    Text,
+    /// Opens the capture of the "text copied" notification in the editor, with its text
+    /// selection tool (not a menu item).
+    EditCaptureText,
+    /// Opens the language settings of Windows, to add text recognition (not a menu item).
+    OcrLanguages,
 }
 
 impl Action {
@@ -99,6 +108,7 @@ impl Action {
             Exit,
             Update,
             WhatsNew,
+            Text,
         ]
         .into_iter()
         .find(|a| *a as usize == id)
@@ -347,20 +357,27 @@ fn hide_balloon(hwnd: HWND) {
 /// saved already), Save as asks where. Clicking the toast itself opens the editor. False if
 /// Windows refused it.
 fn show_capture_toast(hwnd: HWND, title: &str, text: &str, saved: bool) -> bool {
-    BALLOON_CLICK.with(|c| c.set(None));
-    discard_balloon_image();
-    hide_capture_toast();
     let edit = Action::EditCapture as u32;
     let mut buttons = vec![Button { label: t("Edit"), action: edit }];
     if !saved {
         buttons.push(Button { label: t("Save"), action: Action::SaveCapture as u32 });
     }
     buttons.push(Button { label: t("Save as"), action: Action::SaveCaptureAs as u32 });
+    show_toast(hwnd, title, text, edit, &buttons)
+}
+
+/// A notification about the capture in `BALLOON_IMAGE`: clicking it does `click`. False if
+/// Windows refused it.
+fn show_toast(hwnd: HWND, title: &str, text: &str, click: u32, buttons: &[Button]) -> bool {
+    BALLOON_CLICK.with(|c| c.set(None));
+    discard_balloon_image();
+    hide_capture_toast();
+    let edit = click;
     let token = TOAST_COUNTER.with(|c| {
         c.set(c.get().wrapping_add(1));
         c.get()
     });
-    match toast::show(hwnd, TOAST_MSG, token, title, text, edit, &buttons) {
+    match toast::show(hwnd, TOAST_MSG, token, title, text, edit, buttons) {
         Ok(t) => {
             CAPTURE_TOAST.with(|c| *c.borrow_mut() = Some((token, t)));
             true
@@ -383,8 +400,10 @@ fn discard_balloon_image() {
 
 // ---- hotkeys -----------------------------------------------------------------------------
 
-fn bindings(c: &Config) -> [(Action, Hotkey, &'static str, &'static str); 5] {
-    let actions = [Action::Region, Action::Fullscreen, Action::ActiveWindow, Action::Scrolling, Action::Picker];
+fn bindings(c: &Config) -> [(Action, Hotkey, &'static str, &'static str); 6] {
+    // In the order of `Hotkeys::list`.
+    let actions =
+        [Action::Region, Action::Fullscreen, Action::ActiveWindow, Action::Scrolling, Action::Text, Action::Picker];
     let list = c.hotkeys.list();
     std::array::from_fn(|i| (actions[i], list[i].2, list[i].1, list[i].0))
 }
@@ -767,6 +786,7 @@ unsafe fn show_menu(hwnd: HWND, full: bool) -> Option<Action> {
     m.add(Action::AllScreens as usize, Icon::AllScreens, t("&All screens"));
     m.add(Action::ActiveWindow as usize, Icon::Window, &menu_label(t("Active &window"), c.hotkeys.active_window));
     m.add(Action::Scrolling as usize, Icon::Scrolling, &menu_label(t("&Scrolling page"), c.hotkeys.scrolling));
+    m.add(Action::Text as usize, Icon::Text, &menu_label(t("Copy &text from the screen"), c.hotkeys.text));
     m.separator();
     m.add(Action::OpenFile as usize, Icon::OpenFile, t("&Open image from file..."));
     m.add(Action::OpenClipboard as usize, Icon::Clipboard, t("Open image from &clipboard"));
@@ -832,15 +852,26 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
     }
     let c = cfg();
     let img: Option<RgbaImage> = match action {
-        Action::Region | Action::Scrolling => {
+        Action::Region | Action::Scrolling | Action::Text => {
             let windows = top_level_windows();
+            let mode = match action {
+                Action::Scrolling => Mode::Scroll,
+                Action::Text => Mode::Text,
+                _ => Mode::Region,
+            };
             match grab(virtual_screen()) {
                 Some(shot) => {
                     // Notifications stay above every normal window, the overlay included, and
                     // would take the clicks there. Ours is in the frozen screenshot already,
                     // so it can go now. (Other apps' notifications cannot be removed.)
                     hide_balloon(hwnd);
-                    match overlay::select(&shot, windows, action == Action::Scrolling, c.show_magnifier) {
+                    match overlay::select(&shot, windows, mode, c.show_magnifier) {
+                        Some(out) if out.text.is_some() => {
+                            let img = shot.crop_rgba(out.rect);
+                            drop(shot);
+                            deliver_text(hwnd, out.text.unwrap_or(Ok(String::new())), img);
+                            None
+                        }
                         Some(out) if out.scroll => {
                             drop(shot);
                             std::thread::sleep(Duration::from_millis(120));
@@ -953,6 +984,56 @@ fn deliver(hwnd: HWND, img: RgbaImage, c: &Config) {
     BALLOON_IMAGE.with(|c| *c.borrow_mut() = Some(path));
 }
 
+/// Text mode: puts the text on the clipboard and says so with its first words. The capture
+/// goes along with the notification, so "Edit" can open it to select the text exactly.
+fn deliver_text(hwnd: HWND, text: Result<String, OcrError>, img: Option<RgbaImage>) {
+    let raw = img.and_then(|img| {
+        let path = imageio::temp_raw_path();
+        match imageio::write_raw(&path, &img) {
+            Ok(()) => Some(path),
+            Err(_) => {
+                std::fs::remove_file(&path).ok();
+                None
+            }
+        }
+    });
+    let (title, body) = match text {
+        Ok(text) if !text.trim().is_empty() => match imageio::copy_text_to_clipboard(&text) {
+            Ok(()) => (t("Text copied"), ocr::preview(&text, 160)),
+            Err(e) => {
+                discard(raw);
+                return balloon(hwnd, t("Text not copied"), &tf("Copy failed: {0}", &[&e]), true);
+            }
+        },
+        Ok(_) => (t("No text found"), t("Blink could not read any text there.").to_string()),
+        Err(e) => {
+            discard(raw);
+            balloon(hwnd, t("Text recognition is not available"), &e.message(), true);
+            if e == OcrError::NoLanguage {
+                BALLOON_CLICK.with(|c| c.set(Some(Action::OcrLanguages)));
+            }
+            return;
+        }
+    };
+    let Some(path) = raw else {
+        return balloon(hwnd, title, &body, false);
+    };
+    let edit = Action::EditCaptureText as u32;
+    if show_toast(hwnd, title, &body, edit, &[Button { label: t("Open in editor"), action: edit }]) {
+        BALLOON_IMAGE.with(|c| *c.borrow_mut() = Some(path));
+        return;
+    }
+    balloon(hwnd, title, &format!("{}\n{body}", t("Click to open it in the editor.")), false);
+    BALLOON_CLICK.with(|c| c.set(Some(Action::EditCaptureText)));
+    BALLOON_IMAGE.with(|c| *c.borrow_mut() = Some(path));
+}
+
+fn discard(raw: Option<PathBuf>) {
+    if let Some(p) = raw {
+        std::fs::remove_file(p).ok();
+    }
+}
+
 /// The "Save" button of the capture notification: saves that screenshot like "save after
 /// capture" does. If that fails the screenshot opens in the editor, so it is not lost.
 fn save_capture(hwnd: HWND) {
@@ -982,9 +1063,19 @@ fn run_action(hwnd: HWND, action: Action, from_menu: bool) {
                 run_action(hwnd, a, true);
             }
         }
-        Action::Region | Action::Fullscreen | Action::ActiveWindow | Action::Scrolling | Action::AllScreens => {
-            capture(hwnd, action, from_menu)
+        Action::Region
+        | Action::Fullscreen
+        | Action::ActiveWindow
+        | Action::Scrolling
+        | Action::AllScreens
+        | Action::Text => capture(hwnd, action, from_menu),
+        Action::EditCaptureText => {
+            if let Some(path) = BALLOON_IMAGE.with(|c| c.borrow_mut().take()) {
+                spawn_self(&["--edit-raw", &path.display().to_string(), "--select-text"]);
+            }
+            hide_capture_toast();
         }
+        Action::OcrLanguages => super::open_language_settings(),
         Action::OpenFile => spawn_self(&["--open-dialog"]),
         Action::OpenClipboard => spawn_self(&["--clipboard"]),
         Action::OpenFolder => {
@@ -1066,6 +1157,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     a if a == Action::EditCapture as usize => run_action(hwnd, Action::EditCapture, false),
                     a if a == Action::SaveCapture as usize => run_action(hwnd, Action::SaveCapture, false),
                     a if a == Action::SaveCaptureAs as usize => run_action(hwnd, Action::SaveCaptureAs, false),
+                    a if a == Action::EditCaptureText as usize => run_action(hwnd, Action::EditCaptureText, false),
                     _ => {}
                 }
             }

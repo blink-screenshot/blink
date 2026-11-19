@@ -465,6 +465,16 @@ fn draw_tool_icon(p: &Painter, r: Rect, tool: Tool, c: Color32) {
             round_line(p, vec![at(0.25, 0.0), at(0.25, 0.75), at(1.0, 0.75)], 1.8, c);
             round_line(p, vec![at(0.0, 0.25), at(0.75, 0.25), at(0.75, 1.0)], 1.8, c);
         }
+        Tool::SelectText => {
+            // Four corners around a "T", like text mode on the capture bar.
+            for (sx, sy) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+                let dx = if sx == 0.0 { 0.28 } else { -0.28 };
+                let dy = if sy == 0.0 { 0.28 } else { -0.28 };
+                round_line(p, vec![at(sx, sy + dy), at(sx, sy), at(sx + dx, sy)], 1.7, c);
+            }
+            round_line(p, vec![at(0.3, 0.3), at(0.7, 0.3)], 1.8, c);
+            round_line(p, vec![at(0.5, 0.3), at(0.5, 0.74)], 1.8, c);
+        }
     }
 }
 
@@ -564,6 +574,7 @@ fn properties(app: &mut EditorApp, ctx: &egui::Context, ui: &mut Ui) {
         Tool::Select => {
             hint(ui, t("Click an object to select it, drag to move it. Press ? for all shortcuts."));
         }
+        Tool::SelectText => text_props(ui, ctx, app),
         Tool::Crop => {
             hint(ui, t("Drag over the image to crop."));
             if app.doc.crop.is_some() && ui.button(t("Reset crop")).clicked() {
@@ -635,7 +646,7 @@ fn properties(app: &mut EditorApp, ctx: &egui::Context, ui: &mut Ui) {
             group(ui, t("Stamp"), |ui| emoji_picker(ui, ctx, app, &current));
             group(ui, t("Size"), |ui| stamp_size(ui, app, style));
         }
-        Tool::Redact => redact_props(ui, app, style, selected.as_ref().map(|s| &s.2)),
+        Tool::Redact => redact_props(ui, ctx, app, style, selected.as_ref().map(|s| &s.2)),
     }
 }
 
@@ -1012,7 +1023,7 @@ fn size_slider(ui: &mut Ui, app: &mut EditorApp, tool: Tool, style: Style) {
     }
 }
 
-fn redact_props(ui: &mut Ui, app: &mut EditorApp, style: Style, selected_kind: Option<&Kind>) {
+fn redact_props(ui: &mut Ui, ctx: &egui::Context, app: &mut EditorApp, style: Style, selected_kind: Option<&Kind>) {
     let current = match selected_kind {
         Some(Kind::Redact(m)) => *m,
         _ => app.redact_mode,
@@ -1043,6 +1054,8 @@ fn redact_props(ui: &mut Ui, app: &mut EditorApp, style: Style, selected_kind: O
             }
         });
     }
+    find_private_button(ui, ctx, app);
+    hint(ui, t("Click a word or key to hide it, drag to hide anything else."));
     hint(
         ui,
         if current == RedactMode::Solid {
@@ -1051,6 +1064,67 @@ fn redact_props(ui: &mut Ui, app: &mut EditorApp, style: Style, selected_kind: O
             t("Content is destroyed, not just softened. For passwords/keys a black box is the 100% safe choice.")
         },
     );
+}
+
+fn find_private_button(ui: &mut Ui, ctx: &egui::Context, app: &mut EditorApp) {
+    if ui
+        .button(t("Find private info"))
+        .on_hover_text(t(
+            "Reads the text and suggests what to hide: e-mail addresses, phone numbers, IBANs, card numbers, \
+             keys and passwords",
+        ))
+        .clicked()
+    {
+        app.find_private(ctx);
+    }
+}
+
+/// The text tool: what it is doing, and buttons for the whole text.
+fn text_props(ui: &mut Ui, ctx: &egui::Context, app: &mut EditorApp) {
+    use super::textsel::OcrJob;
+    match &app.ocr {
+        OcrJob::Idle | OcrJob::Running(_) => {
+            ui.add(egui::Spinner::new().size(16.0));
+            hint(ui, t("Reading text\u{2026}"));
+            return;
+        }
+        OcrJob::Failed(e) => {
+            let msg = e.message();
+            let no_language = *e == crate::ocr::OcrError::NoLanguage;
+            ui.label(RichText::new(msg).color(pal().warn));
+            if no_language && ui.button(t("Language settings")).clicked() {
+                platform::open_language_settings();
+            }
+            return;
+        }
+        OcrJob::Ready(page) if page.is_empty() => {
+            hint(ui, t("No text found in this image."));
+            find_private_button(ui, ctx, app);
+            return;
+        }
+        OcrJob::Ready(_) => {}
+    }
+    group(ui, t("Text"), |ui| {
+        if ui.button(t("Copy all")).on_hover_text(t("Copy all text in the image")).clicked() {
+            app.copy_all_text(ctx);
+        }
+        if ui.button(t("Select all")).on_hover_text("Ctrl+A").clicked() {
+            app.select_all_text(ctx);
+        }
+        let any = !app.text_sel.is_empty();
+        if ui.add_enabled(any, egui::Button::new(t("Copy selection"))).on_hover_text("Ctrl+C").clicked() {
+            app.copy_selected_text();
+        }
+        if ui
+            .add_enabled(any, egui::Button::new(t("Hide selection")))
+            .on_hover_text(t("Cover the selected text with the redaction tool's mode"))
+            .clicked()
+        {
+            app.redact_selected_text();
+        }
+    });
+    find_private_button(ui, ctx, app);
+    hint(ui, t("Drag over text to select it, or drag a box around it. Double-click: line, triple-click: paragraph."));
 }
 
 // ---- status bar ----------------------------------------------------------------------------
@@ -1243,7 +1317,7 @@ pub fn shortcuts_window(app: &mut EditorApp, ctx: &egui::Context) {
                     }
                 });
                 section(&mut cols[1], t("Editing"));
-                let rows: [(&str, &str); 18] = [
+                let rows: [(&str, &str); 19] = [
                     ("Ctrl", t("Hold: select / move with any tool")),
                     ("Shift", t("While drawing: straight lines, squares")),
                     ("Del", t("Delete the selection")),
@@ -1252,6 +1326,7 @@ pub fn shortcuts_window(app: &mut EditorApp, ctx: &egui::Context) {
                     ("Ctrl+Z", t("Undo")),
                     ("Ctrl+Y", t("Redo")),
                     ("Ctrl+C", t("Copy to clipboard")),
+                    ("Ctrl+A", t("Select all text (OCR tool)")),
                     ("Ctrl+S", t("Save to the screenshots folder")),
                     ("Ctrl+Shift+S", t("Save as")),
                     (t("Space+drag"), t("Pan")),

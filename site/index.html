@@ -299,7 +299,7 @@
   <div class="strip">
     <div class="wrap">
       <ul>
-        <li><span><b>7 capture modes</b> including scrolling pages</span></li>
+        <li><span><b>7 capture modes</b> including scrolling pages, plus <b>copy text</b></span></li>
         <li><span><b>Real redaction</b>, not a cosmetic blur</span></li>
         <li><span><b>17 backgrounds</b> and <b>18 device frames</b></span></li>
         <li><span><b>Free and open source.</b> No account.</span></li>
@@ -333,11 +333,12 @@
             <li>Window edges without the invisible resize border or shadow that Windows adds.</li>
             <li>Works on GPU-rendered apps such as Chrome, Edge and Electron, where copying a window directly often returns black. Blink cuts the window out of a frozen copy of the screen instead.</li>
             <li>Scrolling capture stitches the page together and recognises fixed headers and footers.</li>
+            <li><b>Copy text</b> instead of an image: in the Text mode (<kbd>T</kbd>), click a line, <kbd>Ctrl</kbd> + click a paragraph or drag over a region, and the text is on your clipboard. It is read by the OCR engine built into Windows, offline.</li>
           </ul>
         </div>
         <div>
           <figure>
-            <img src="img/capture-bar.png" width="700" height="108" loading="lazy" alt="The mode bar of the capture overlay: Region / window (active, in pink), This screen (F), All screens (A), Scrolling (S), and a second row with Drag = region, Click = window, Ctrl + Click = inner pane, Space = next mode, Esc = cancel.">
+            <img src="img/capture-bar.png" width="808" height="108" loading="lazy" alt="The mode bar of the capture overlay: Region / window (active, in pink), This screen (F), All screens (A), Scrolling (S), Text (T), and a second row with Drag = region, Click = window, Ctrl + Click = inner pane, Space = next mode, Esc = cancel.">
             <figcaption>The mode bar of the capture overlay.</figcaption>
           </figure>
           <div class="card" style="margin-top:20px">
@@ -350,6 +351,7 @@
                 <tr><td>Screen under the mouse</td><td><kbd>Shift</kbd> + <kbd>Print Screen</kbd></td></tr>
                 <tr><td>Active window</td><td><kbd>Alt</kbd> + <kbd>Print Screen</kbd></td></tr>
                 <tr><td>Scrolling page</td><td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Print Screen</kbd></td></tr>
+                <tr><td>Copy text from the screen</td><td><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Print Screen</kbd></td></tr>
                 <tr><td>Capture menu</td><td><kbd>Ctrl</kbd> + <kbd>Print Screen</kbd></td></tr>
               </tbody>
             </table>
@@ -398,6 +400,7 @@
           <p>For passwords and API keys, use the <b>black box</b>. It removes the content completely, and the editor tells you so.</p>
           <ul class="ticks">
             <li>Blur, pixelate or black box, with adjustable strength</li>
+            <li>Click a word, key or e-mail address to hide it. <b>Find private info</b> suggests what to hide (e-mail addresses, phone numbers, IBANs, card numbers, IP addresses, keys and tokens, passwords, BSN), and you confirm. It is a help, not a guarantee.</li>
             <li>What you see is what you export: the editor and the export use the same renderer</li>
           </ul>
         </div>
@@ -511,7 +514,7 @@
             <tr><th scope="row">Blur and pixelate</th><td class="blink"><span class="y">Yes</span></td><td><span class="n">No</span><small>text redaction via OCR</small></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td></tr>
             <tr><th scope="row">Background, padding, rounded corners, shadow</th><td class="blink"><span class="y">Yes</span><small>17 presets</small></td><td><span class="n">No</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span><small>since 2026</small></td><td><span class="n">No</span></td><td><span class="n">No</span></td></tr>
             <tr><th scope="row">Device mockups</th><td class="blink"><span class="y">Yes</span><small>18 frames</small></td><td><span class="n">No</span></td><td><span class="n">No</span></td><td><span class="n">No</span></td><td><span class="n">No</span></td><td><span class="n">No</span></td></tr>
-            <tr><th scope="row">Text recognition (OCR)</th><td class="blink"><span class="n">No</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td></tr>
+            <tr><th scope="row">Text recognition (OCR)</th><td class="blink"><span class="y">Yes</span><small>offline, built into Windows</small></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td></tr>
             <tr><th scope="row">Screen recording / GIF</th><td class="blink"><span class="n">No</span></td><td><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td></tr>
             <tr><th scope="row">Upload to the cloud</th><td class="blink"><span class="n">No</span><small>by design</small></td><td><span class="n">No</span></td><td><span class="p">Plugins</span></td><td><span class="y">Many services</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td></tr>
           </tbody>
@@ -527,7 +530,7 @@
         </div>
         <div class="card">
           <h3>Pick ShareX if</h3>
-          <p>you need everything: screen recording, OCR, uploads to dozens of services, automation workflows. It is more powerful than Blink, and busier.</p>
+          <p>you need everything: screen recording, uploads to dozens of services, automation workflows. It is more powerful than Blink, and busier.</p>
         </div>
         <div class="card">
           <h3>Pick Flameshot or Snagit if</h3>
