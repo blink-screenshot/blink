@@ -2,6 +2,12 @@
 
 All notable changes to Blink, per version. Every version is on [GitHub](https://github.com/blink-screenshot/blink/releases) with its installer; the release notes are taken from this file.
 
+## [1.1.2] - 2026-11-19
+
+### Improvements
+
+- **More text is read in dark mode.** Blink already read dark screens a second time with the colours inverted, but kept only lines the first reading had missed entirely. Now it keeps, line by line, the reading that found the most text, so words that one reading skips (often names) are less likely to go missing when you copy text or use *Find private info*.
+
 ## [1.1.1] - 2026-11-19
 
 ### Improvements

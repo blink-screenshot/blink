@@ -399,18 +399,14 @@ pub fn read_with(engine: &dyn Engine, bgra: &[u8], w: u32, h: u32) -> Result<Pag
         let bh = band.bottom - band.top;
         let mut read = engine.read(part, sw, bh)?;
         // OCR engines are made for dark text on a light background. Light text on a dark
-        // background (dark mode, terminals, code editors) is read far better inverted, so a
-        // band with a large dark area is read a second time inverted, and the lines that
-        // reading adds are kept.
+        // background (dark mode, terminals, code editors) is read far better inverted (a
+        // quarter more words on a dark OneNote page), so a band with a large dark area is read
+        // a second time inverted. The engine skips words it is unsure of, and not the same
+        // ones in both readings, so per line the reading with the most text is kept.
         if dark_share(part) >= DARK_SHARE_TO_INVERT {
             let inverted: Vec<u8> =
                 part.chunks_exact(4).flat_map(|p| [255 - p[0], 255 - p[1], 255 - p[2], p[3]]).collect();
-            for line in engine.read(&inverted, sw, bh)?.lines {
-                let r = line.rect();
-                if !read.lines.iter().any(|l| overlaps(&l.rect(), &r)) {
-                    read.lines.push(line);
-                }
-            }
+            read.lines = merge_readings(read.lines, engine.read(&inverted, sw, bh)?.lines);
         }
         for mut line in read.lines {
             // A line in the overlap of two bands is read twice: keep it in the band that has
@@ -442,6 +438,27 @@ fn dark_share(bgra: &[u8]) -> f32 {
         all += 1;
     }
     dark as f32 / all.max(1) as f32
+}
+
+/// Combines two readings of the same image. A line of `other` in a new place is added; a line
+/// of `other` that holds more text than the lines of `lines` in its place replaces them (one
+/// reading may have skipped a word, or split the line in two); otherwise `lines` is kept.
+/// Replaced lines keep their place in the reading order.
+fn merge_readings(mut lines: Vec<Line>, other: Vec<Line>) -> Vec<Line> {
+    let chars = |l: &Line| l.words.iter().map(|w| w.text.chars().count()).sum::<usize>();
+    for line in other {
+        let r = line.rect();
+        let same: Vec<usize> = (0..lines.len()).filter(|&i| overlaps(&lines[i].rect(), &r)).collect();
+        if same.is_empty() {
+            lines.push(line);
+        } else if chars(&line) > same.iter().map(|&i| chars(&lines[i])).sum() {
+            for &i in same.iter().rev() {
+                lines.remove(i);
+            }
+            lines.insert(same[0], line);
+        }
+    }
+    lines
 }
 
 /// Whether two line boxes are mostly the same place (the same line read twice).
@@ -696,6 +713,38 @@ pub(crate) mod tests {
         // The page's lines come from the normal reading, the code block's from the inverted
         // one, each exactly once.
         assert_eq!(ys, vec![100.0, 300.0, 700.0]);
+    }
+
+    fn texts(lines: &[Line]) -> Vec<String> {
+        lines.iter().map(|l| l.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")).collect()
+    }
+
+    #[test]
+    fn merged_readings_keep_the_fullest_line() {
+        let line =
+            |ws: &[(&str, f32)], y: f32| Line { words: ws.iter().map(|(t, x)| word(t, *x, y, 60.0, 20.0)).collect() };
+        let normal = vec![
+            line(&[("Review", 0.0), ("Excel", 70.0)], 0.0),
+            // "Sandor follows" skipped.
+            line(&[("paste", 140.0), ("data", 210.0)], 40.0),
+            line(&[("Keanu", 0.0), ("shares", 70.0), ("template", 140.0)], 80.0),
+            // A line split in two.
+            line(&[("First", 0.0)], 120.0),
+            line(&[("action", 70.0)], 120.0),
+        ];
+        let inverted = vec![
+            line(&[("Review", 0.0), ("Excel", 70.0)], 0.0),
+            line(&[("Sandor", 0.0), ("follows", 70.0), ("paste", 140.0), ("data", 210.0)], 40.0),
+            // Less text than the normal reading: not taken.
+            line(&[("Keanu", 0.0), ("template", 140.0)], 80.0),
+            line(&[("First", 0.0), ("action:", 70.0)], 120.0),
+            // Only in this reading.
+            line(&[("Stedin", 300.0)], 160.0),
+        ];
+        assert_eq!(
+            texts(&merge_readings(normal, inverted)),
+            ["Review Excel", "Sandor follows paste data", "Keanu shares template", "First action:", "Stedin"]
+        );
     }
 
     #[test]
