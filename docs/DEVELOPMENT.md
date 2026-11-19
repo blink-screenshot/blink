@@ -5,7 +5,7 @@
 ```
 cargo test
 cargo build --release            # on Windows: target\release\Blink.exe
-makensis /DVERSION=1.1.0 /DEXE=..\target\release\Blink.exe installer\blink.nsi
+makensis /DVERSION=1.1.1 /DEXE=..\target\release\Blink.exe installer\blink.nsi
 ```
 
 Cross-compiling from Linux works too (needs mingw-w64 and NSIS):
@@ -13,7 +13,7 @@ Cross-compiling from Linux works too (needs mingw-w64 and NSIS):
 ```
 rustup target add x86_64-pc-windows-gnu
 cargo build --release --target x86_64-pc-windows-gnu
-makensis -DVERSION=1.1.0 -DEXE=../target/x86_64-pc-windows-gnu/release/Blink.exe installer/blink.nsi
+makensis -DVERSION=1.1.1 -DEXE=../target/x86_64-pc-windows-gnu/release/Blink.exe installer/blink.nsi
 ```
 
 The editor and the settings window also run on Linux (`Blink --open image.png`), which is handy for development. Capturing, the tray and hotkeys are Windows-only. All tests run on Linux, and CI runs them on both Windows and Linux.

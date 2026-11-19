@@ -135,6 +135,7 @@ pub fn find_in(s: &str) -> Vec<(usize, usize, Kind)> {
     add(ips(s), Kind::Ip, &mut found);
     add(phones(s), Kind::Phone, &mut found);
     add(generic_secrets(s), Kind::Secret, &mut found);
+    add(password_shaped(s), Kind::Password, &mut found);
     found.sort_by_key(|f| f.0);
     found
 }
@@ -508,6 +509,52 @@ fn generic_secrets(s: &str) -> Vec<(usize, usize)> {
     out
 }
 
+/// Symbols that make a word look like a password. Hyphens, dots, plus signs, question marks,
+/// underscores, "&" and "=" are allowed in one but do not count: ordinary text and code are
+/// full of them ("COVID-19", "Ctrl+C", "Windows11?", "MAX_SIZE_2", "&Color32", "a=1").
+const PASSWORD_SYMBOLS: &str = "!@#$%^*~";
+/// Characters a password may contain besides letters and digits; anything else (brackets,
+/// colons, slashes, quotes, ...) makes it code or a path rather than a password.
+const PASSWORD_CHARS: &str = "!@#$%^*~&_=+-.?";
+
+/// Unlabelled passwords: one word of 8 to 40 characters with an upper-case letter, a
+/// lower-case letter, a digit and a symbol ("Winter2026!", "P@ssw0rd"). Ordinary text hardly
+/// ever mixes all four in one word, and code is ruled out by its brackets and colons;
+/// e-mail addresses and keys are found earlier.
+fn password_shaped(s: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, c) in s.char_indices().chain(std::iter::once((s.len(), ' '))) {
+        if !c.is_whitespace() {
+            start.get_or_insert(i);
+            continue;
+        }
+        let Some(mut a) = start.take() else { continue };
+        let mut b = i;
+        // Brackets and quotes around it, and sentence punctuation after it (not "!", which
+        // passwords often end with).
+        while let Some(c) = s[a..b].chars().next().filter(|c| "([{<\"'`\u{201c}\u{2018}".contains(*c)) {
+            a += c.len_utf8();
+        }
+        while let Some(c) = s[a..b].chars().next_back().filter(|c| ")]}>\"'`,.;:\u{201d}\u{2019}".contains(*c)) {
+            b -= c.len_utf8();
+        }
+        let w = &s[a..b];
+        let n = w.chars().count();
+        if !(8..=40).contains(&n) || !w.chars().all(|c| c.is_alphanumeric() || PASSWORD_CHARS.contains(c)) {
+            continue;
+        }
+        let upper = w.chars().any(|c| c.is_uppercase());
+        let lower = w.chars().any(|c| c.is_lowercase());
+        let digit = w.chars().any(|c| c.is_ascii_digit());
+        let symbol = w.chars().any(|c| PASSWORD_SYMBOLS.contains(c));
+        if upper && lower && digit && symbol {
+            out.push((a, b));
+        }
+    }
+    out
+}
+
 /// The value after a label like "Password:" or "token =": the next token, or what follows
 /// the separator in the same token ("password=hunter2"). A password label gives a password,
 /// a key or token label a key or token.
@@ -655,6 +702,33 @@ mod tests {
             "Supercalifragilisticexpialidocious",
         ] {
             assert!(kinds(s).is_empty(), "{s}: {:?}", kinds(s));
+        }
+    }
+
+    #[test]
+    fn passwords_without_a_label() {
+        assert_eq!(one("Winter2026!"), ("Winter2026!".into(), Kind::Password));
+        assert_eq!(one("new one: (P@ssw0rd#1)."), ("P@ssw0rd#1".into(), Kind::Password));
+        assert_eq!(one("wachtwoord is Welkom01# geworden").0, "Welkom01#");
+        // Words that mix letters, digits and symbols in ordinary text.
+        for s in [
+            "COVID-19 measures",
+            "Press Ctrl+C to copy",
+            "Upgrade to Windows11?",
+            "Saved as PDF/A-1b.",
+            "x86_64 build",
+            "iPhone15 Pro",
+            "Version 1.1.0!",
+            "Hi!",
+            "See https://example.com/Path2026!",
+            // Code.
+            "let c = Color32::from_rgb(239, 68, 68);",
+            "assert!(Version(1, 2) > v);",
+            "seed ^= 0x9E37_79B9;",
+            "fn draw(&Color32, &mut Vec2) -> MAX_SIZE_2",
+            "format!(\"#{r:02X}{g:02X}\")",
+        ] {
+            assert!(kinds(s).is_empty(), "{s:?}: {:?}", kinds(s));
         }
     }
 
