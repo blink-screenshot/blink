@@ -4,6 +4,7 @@
 mod canvas;
 mod frame_ui;
 mod prefs;
+mod textsel;
 mod ui;
 
 use crate::annot::{Annotation, Kind, RedactMode, ShapeKind, Style};
@@ -24,6 +25,8 @@ use std::time::Instant;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
     Select,
+    /// Selects and copies the text in the screenshot (OCR).
+    SelectText,
     Rect,
     Ellipse,
     Shape,
@@ -40,12 +43,13 @@ pub enum Tool {
 }
 
 /// Number of tools.
-pub const TOOLS: usize = 14;
+pub const TOOLS: usize = 15;
 
 impl Tool {
     /// In toolbar order.
     pub const ALL: [Tool; TOOLS] = [
         Tool::Select,
+        Tool::SelectText,
         Tool::Rect,
         Tool::Ellipse,
         Tool::Shape,
@@ -66,7 +70,7 @@ impl Tool {
     /// The toolbar group: a divider is drawn between groups.
     pub fn group(self) -> u8 {
         match self {
-            Tool::Select => 0,
+            Tool::Select | Tool::SelectText => 0,
             Tool::Rect | Tool::Ellipse | Tool::Shape | Tool::Line | Tool::Arrow => 1,
             Tool::Pen | Tool::Highlight => 2,
             Tool::Text | Tool::Callout | Tool::Step | Tool::Emoji => 3,
@@ -78,6 +82,7 @@ impl Tool {
     pub fn name(self) -> &'static str {
         match self {
             Tool::Select => t("Select / move"),
+            Tool::SelectText => t("Select text (OCR)"),
             Tool::Rect => t("Rectangle"),
             Tool::Ellipse => t("Ellipse"),
             Tool::Shape => t("Shapes"),
@@ -97,6 +102,7 @@ impl Tool {
     pub fn short_name(self) -> &'static str {
         match self {
             Tool::Select => t("Select"),
+            Tool::SelectText => "OCR",
             Tool::Rect => t("Rectangle"),
             Tool::Ellipse => t("Ellipse"),
             Tool::Shape => t("Shapes"),
@@ -116,6 +122,7 @@ impl Tool {
     pub fn id(self) -> &'static str {
         match self {
             Tool::Select => "select",
+            Tool::SelectText => "select_text",
             Tool::Rect => "rect",
             Tool::Ellipse => "ellipse",
             Tool::Shape => "shape",
@@ -138,6 +145,7 @@ impl Tool {
         use egui::Key;
         match self {
             Tool::Select => Key::V,
+            Tool::SelectText => Key::X,
             Tool::Rect => Key::R,
             Tool::Ellipse => Key::E,
             Tool::Shape => Key::S,
@@ -190,11 +198,34 @@ pub enum Handle {
 
 pub enum Drag {
     None,
-    Create { id: u64, start: Pos2 },
-    Move { id: u64, last: Pos2, moved: bool },
-    Handle { id: u64, handle: Handle, moved: bool },
-    Crop { start: Pos2, cur: Pos2 },
+    Create {
+        id: u64,
+        start: Pos2,
+    },
+    Move {
+        id: u64,
+        last: Pos2,
+        moved: bool,
+    },
+    Handle {
+        id: u64,
+        handle: Handle,
+        moved: bool,
+    },
+    Crop {
+        start: Pos2,
+        cur: Pos2,
+    },
     Pan,
+    /// Selecting text like in a document, from word `anchor` (an index in the read page).
+    TextFlow {
+        anchor: usize,
+    },
+    /// Selecting the text inside a box.
+    TextMarquee {
+        start: Pos2,
+        cur: Pos2,
+    },
 }
 
 pub struct TextEditing {
@@ -288,9 +319,24 @@ pub struct EditorApp {
     pub hover: Option<Pos2>,
     prefs_saved: EditorPrefs,
     prefs_pending: Option<Instant>,
+    /// The text of the screenshot (read when first needed).
+    pub ocr: textsel::OcrJob,
+    pub after_ocr: Option<textsel::AfterOcr>,
+    /// Selected words of the read text (indices in reading order).
+    pub text_sel: Vec<usize>,
+    /// Suggested redactions from "Find private info".
+    pub privacy: Option<textsel::Privacy>,
+    /// Private info in the read text (found once, when the text is read).
+    pub found: Vec<crate::sensitive::Finding>,
 }
 
 pub fn run(img: RgbaImage, source: Option<PathBuf>) -> Result<(), String> {
+    run_with(img, source, false)
+}
+
+/// `run`, starting with the text selection tool when `select_text` (the "text copied"
+/// notification opens the capture like that).
+pub fn run_with(img: RgbaImage, source: Option<PathBuf>, select_text: bool) -> Result<(), String> {
     if img.width() == 0 || img.height() == 0 {
         return Err(t("The image is empty.").into());
     }
@@ -337,7 +383,11 @@ pub fn run(img: RgbaImage, source: Option<PathBuf>) -> Result<(), String> {
             }
             #[cfg(not(windows))]
             let _ = (phys, maximize, light);
-            Ok(Box::new(EditorApp::new(cc, img)))
+            let mut app = EditorApp::new(cc, img);
+            if select_text {
+                app.tool = Tool::SelectText;
+            }
+            Ok(Box::new(app))
         }),
     )
     .map_err(|e| tf("Could not open the editor window: {0}", &[&e]))
@@ -378,7 +428,13 @@ impl EditorApp {
             undo: Vec::new(),
             redo: Vec::new(),
             next_id: 1,
-            tool: prefs.tool.as_deref().and_then(Tool::from_id).filter(|t| *t != Tool::Crop).unwrap_or(Tool::Arrow),
+            // Not crop or text selection: those are for one image, and reading text costs time.
+            tool: prefs
+                .tool
+                .as_deref()
+                .and_then(Tool::from_id)
+                .filter(|t| *t != Tool::Crop && *t != Tool::SelectText)
+                .unwrap_or(Tool::Arrow),
             styles,
             redact_mode: prefs.redact_mode.unwrap_or(RedactMode::Blur),
             shape: prefs.shape.unwrap_or(ShapeKind::Star),
@@ -423,6 +479,11 @@ impl EditorApp {
             hover: None,
             prefs_saved: EditorPrefs::default(),
             prefs_pending: None,
+            ocr: textsel::OcrJob::Idle,
+            after_ocr: None,
+            text_sel: Vec::new(),
+            privacy: None,
+            found: Vec::new(),
         };
         app.prefs_saved = app.prefs_snapshot();
         app
@@ -852,7 +913,12 @@ impl EditorApp {
             return;
         }
         if copy {
-            self.copy(ctx);
+            // With text selected in the text tool, Ctrl+C copies that text.
+            if self.tool == Tool::SelectText && !self.text_sel.is_empty() {
+                self.copy_selected_text();
+            } else {
+                self.copy(ctx);
+            }
         }
         for (key, m) in presses {
             use egui::Key;
@@ -868,6 +934,7 @@ impl EditorApp {
                         self.pan = Vec2::ZERO;
                     }
                     Key::Num1 => self.zoom = Some(1.0 / ctx.pixels_per_point()),
+                    Key::A if self.tool == Tool::SelectText => self.select_all_text(ctx),
                     Key::B if self.frame.active() => self.panel_collapsed = !self.panel_collapsed,
                     Key::Plus | Key::Equals => self.zoom = Some(self.last_zoom * 1.25),
                     Key::Minus => self.zoom = Some(self.last_zoom / 1.25),
@@ -909,6 +976,14 @@ impl EditorApp {
     fn escape(&mut self, ctx: &egui::Context) {
         if self.eyedropper.is_some() {
             self.cancel_eyedropper();
+            return;
+        }
+        if self.privacy.is_some() {
+            self.privacy = None;
+            return;
+        }
+        if !self.text_sel.is_empty() && matches!(self.drag, Drag::None) {
+            self.text_sel.clear();
             return;
         }
         match std::mem::replace(&mut self.drag, Drag::None) {
@@ -1038,9 +1113,16 @@ impl eframe::App for EditorApp {
             self.request_close(ctx);
         }
         self.ctrl_select = self.text_edit.is_none() && ctx.input(|i| i.modifiers.ctrl);
+        // The text tool needs the text; the redaction tool reads it in the background, so a
+        // word or key can be hidden with one click.
+        if matches!(self.tool, Tool::SelectText | Tool::Redact) {
+            self.ensure_ocr(ctx);
+        }
+        self.poll_ocr(ctx);
         self.handle_shortcuts(ctx);
         ui::toolbar(self, ctx);
         ui::property_bar(self, ctx);
+        textsel::privacy_bar(self, ctx);
         ui::status_bar(self, ctx);
         if self.frame.active() {
             frame_ui::panel(self, ctx);

@@ -1,6 +1,6 @@
 [package]
 name = "blink"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "Lightweight screenshot tool for Windows with an annotation editor, real redaction, backgrounds and device mockups"
 license = "GPL-3.0-or-later"
@@ -48,10 +48,16 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security",
     "Win32_Networking_WinHttp",
 ] }
-# WinRT toast notifications (buttons need a toast; the tray balloon has none).
+# WinRT toast notifications (buttons need a toast; the tray balloon has none) and the
+# Windows OCR engine (reading text, offline).
 windows = { version = "0.58", default-features = false, features = [
     "Data_Xml_Dom",
     "Foundation",
+    "Foundation_Collections",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
     "UI_Notifications",
     "Win32_System_WinRT",
 ] }

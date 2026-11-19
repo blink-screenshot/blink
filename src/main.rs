@@ -11,8 +11,10 @@ mod frame;
 mod i18n;
 mod i18n_nl;
 mod imageio;
+mod ocr;
 mod platform;
 mod render;
+mod sensitive;
 mod settings_ui;
 mod stitch;
 mod theme;
@@ -36,7 +38,8 @@ fn main() {
                 let path = PathBuf::from(p);
                 let img = imageio::read_raw(&path).map_err(|e| e.to_string());
                 std::fs::remove_file(&path).ok();
-                img.and_then(|img| editor::run(img, None))
+                let select_text = arg(2) == Some("--select-text");
+                img.and_then(|img| editor::run_with(img, None, select_text))
             }
             None => Err(i18n::t("Missing file path.").into()),
         },

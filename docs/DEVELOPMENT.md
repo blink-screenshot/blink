@@ -5,7 +5,7 @@
 ```
 cargo test
 cargo build --release            # on Windows: target\release\Blink.exe
-makensis /DVERSION=1.0.0 /DEXE=..\target\release\Blink.exe installer\blink.nsi
+makensis /DVERSION=1.1.0 /DEXE=..\target\release\Blink.exe installer\blink.nsi
 ```
 
 Cross-compiling from Linux works too (needs mingw-w64 and NSIS):
@@ -13,7 +13,7 @@ Cross-compiling from Linux works too (needs mingw-w64 and NSIS):
 ```
 rustup target add x86_64-pc-windows-gnu
 cargo build --release --target x86_64-pc-windows-gnu
-makensis -DVERSION=1.0.0 -DEXE=../target/x86_64-pc-windows-gnu/release/Blink.exe installer/blink.nsi
+makensis -DVERSION=1.1.0 -DEXE=../target/x86_64-pc-windows-gnu/release/Blink.exe installer/blink.nsi
 ```
 
 The editor and the settings window also run on Linux (`Blink --open image.png`), which is handy for development. Capturing, the tray and hotkeys are Windows-only. All tests run on Linux, and CI runs them on both Windows and Linux.
@@ -54,6 +54,7 @@ The repository is public, so the check needs no token or account. GitHub allows 
 - **Scaling.** The process is *per-monitor DPI aware (v2)*. All coordinates are physical pixels, a screenshot is a 1:1 copy, and the editor at 100% shows exactly one image pixel per screen pixel. (Tools that mix scaled and physical coordinates produce oddly scaled screenshots on mixed-DPI setups.)
 - **Window capture.** Window edges come from `DWMWA_EXTENDED_FRAME_BOUNDS` (the visible edge, without the invisible resize border and shadow of Windows 10/11), and the window is cut out of a frozen copy of the screen. What you see is what you get, also for GPU-rendered apps where `PrintWindow` often returns black.
 - **Blur that holds.** A plain Gaussian blur with a small radius keeps the shape of letters and can be partly reversed. Blink first reduces the area to blocks, then blurs three times with a radius that scales with the area, and adds noise. For passwords and API keys, the **black box** is the only option that is safe by definition; the editor says so.
+- **Text recognition with the engine Windows has.** `Windows.Media.Ocr` ships with Windows 10 and 11, works offline and adds nothing to the download; Tesseract or an ONNX model would add 10 to 40 MB and a native build. Its weak spot is small text, so images up to about 2.6 megapixels are enlarged twice before reading, and images taller than the engine's maximum are read in overlapping bands (`ocr::read_with`). The capture overlay reads each monitor separately. *Find private info* only suggests: every finding is shown and can be turned off, and checks (IBAN mod 97, Luhn, elfproef) keep false alarms down where a format has one.
 - **Lightweight.** The always-running part (tray, hotkeys, capture, overlay) is plain Win32 with no UI framework. The editor starts as a separate process when needed (egui/OpenGL), so an editor crash never takes the tray down, and several editors can run side by side.
 - **WYSIWYG.** The editor shows the output of the same software renderer that is used for export.
 
@@ -67,6 +68,9 @@ The repository is public, so the check needs no token or account. GitHub allows 
 | `src/platform/win/capture.rs` | screen capture (GDI), window enumeration, DWM bounds |
 | `src/platform/win/scroll.rs` | scrolling capture |
 | `src/stitch.rs` | stitching scroll frames (tested) |
+| `src/ocr.rs`, `src/platform/win/ocr.rs` | reading text: the Windows OCR engine, enlarging small text, reading tall images in bands, selecting words / lines / paragraphs (tested) |
+| `src/sensitive.rs` | finding private info in the read text for *Find private info* (tested) |
+| `src/editor/textsel.rs` | the editor's text tool and *Find private info* |
 | `src/render.rs` | drawing annotations, blur/pixelate (tested) |
 | `src/frame.rs` | backgrounds, device mockups, shadow, composing the frame (tested) |
 | `src/editor/` | editor UI (egui), background/mockup side panel, remembered settings |

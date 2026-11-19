@@ -7,8 +7,8 @@ use image::RgbaImage;
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
 use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows_sys::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, SRCCOPY,
+    BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EnumDisplayMonitors, GetDC, ReleaseDC,
+    SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HDC, HMONITOR, SRCCOPY,
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -86,6 +86,39 @@ impl Shot {
         }
         RgbaImage::from_raw(r.w as u32, r.h as u32, out)
     }
+
+    /// Copies a sub-rectangle (virtual-screen coordinates) out as BGRA, as it is stored.
+    pub fn crop_bgra(&self, r: IRect) -> Option<(IRect, Vec<u8>)> {
+        let r = r.intersect(&self.rect);
+        if r.is_empty() {
+            return None;
+        }
+        let mut out = Vec::with_capacity(r.w as usize * r.h as usize * 4);
+        let stride = self.rect.w as usize * 4;
+        for y in 0..r.h {
+            let sy = (r.y - self.rect.y + y) as usize;
+            let sx = (r.x - self.rect.x) as usize;
+            out.extend_from_slice(&self.bgra[sy * stride + sx * 4..sy * stride + (sx + r.w as usize) * 4]);
+        }
+        Some((r, out))
+    }
+}
+
+unsafe extern "system" fn enum_monitor(_m: HMONITOR, _dc: HDC, r: *mut RECT, lp: LPARAM) -> BOOL {
+    let out = &mut *(lp as *mut Vec<IRect>);
+    if !r.is_null() {
+        out.push(IRect::from_rect(*r));
+    }
+    1
+}
+
+/// Every monitor, in virtual-screen coordinates.
+pub fn monitor_rects() -> Vec<IRect> {
+    let mut out: Vec<IRect> = Vec::new();
+    unsafe {
+        EnumDisplayMonitors(std::ptr::null_mut(), std::ptr::null(), Some(enum_monitor), &mut out as *mut _ as LPARAM);
+    }
+    out
 }
 
 pub fn virtual_screen() -> IRect {

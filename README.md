@@ -28,7 +28,8 @@ A free, open-source screenshot tool for Windows: capture a region, a window or a
 Most screenshot tools stop at "capture and draw an arrow". Blink goes one step further: the screenshot you copy is ready to paste into a bug report, a how-to, a slide or a social post. No second app to add a background, no worrying whether your blur can be undone.
 
 - **Capture exactly what you point at.** Windows snap to their real visible edge, also on GPU-rendered apps (Chrome, Edge, Electron) where other tools return a black window. 1:1 pixels on mixed-scaling multi-monitor setups.
-- **Redaction that holds.** Blink's blur reduces the area to blocks, blurs it three times and adds noise, so text cannot be reconstructed. For passwords there is a black box.
+- **Redaction that holds.** Blink's blur reduces the area to blocks, blurs it three times and adds noise, so text cannot be reconstructed. For passwords there is a black box. *Find private info* reads the screenshot and suggests what to hide: e-mail addresses, phone numbers, IBANs, card numbers, keys and passwords.
+- **Copy text from anything on the screen.** Point at a line, Ctrl + click a paragraph or drag over a region, and the text is on your clipboard. Or select text in a screenshot in the editor. It uses the OCR engine built into Windows, so it works offline.
 - **Present it.** 17 backgrounds and 18 device frames (iPhone, Pixel, iPad, MacBook, Surface, monitors, browser and app windows), with padding, rounded corners and shadow. Copy and Save include the frame at full resolution.
 - **Small and private.** A tray app in plain Win32 with no UI framework. No account, no cloud, no telemetry. The only network request is a daily update check on GitHub, which you can turn off.
 
@@ -38,7 +39,8 @@ Most screenshot tools stop at "capture and draw an arrow". Blink goes one step f
 |---|---|
 | **Capture** | Region, window (hover and click), inner pane (Ctrl + click, for example a browser's page), screen under the mouse, all screens, active window, and **scrolling capture** of a whole page. One overlay over all monitors, with a magnifier and a mode bar. |
 | **Annotate** | Arrows (five head styles), lines, rectangles, ellipses, shapes (star, hexagon, flowchart shapes), freehand, highlighter, text (bold, italic, underline, strikethrough, background), speech bubbles, **numbered steps**, 54 **emoji stamps**, crop. Colour picker with eyedropper. Every tool has a one-key shortcut and remembers its last settings. |
-| **Redact** | Blur, pixelate or black box. |
+| **Redact** | Blur, pixelate or black box. Click a word, key or e-mail address to hide it, or drag over anything. **Find private info** suggests what to hide (e-mail addresses, phone numbers, IBANs, card numbers, IP addresses, keys and tokens, passwords, BSN), you confirm. |
+| **Text (OCR)** | **Copy text from the screen**: a text mode in the capture overlay that copies the line you point at, a paragraph (Ctrl + click) or all text in a region. In the editor: select text like in a document, copy it, or hide it. Offline, with the OCR engine of Windows. |
 | **Present** | Backgrounds (gradients, mesh, waves, solid, transparent, your own), canvas ratios and exact sizes for social media and slides, device mockups that pick the device fitting your screenshot. |
 | **Output** | Copy, Save to a fixed folder, Save as (PNG, JPEG, WebP, BMP). Per capture type: open the editor, copy, save, or ask with a small menu at the mouse. Notification with Edit, Save and Save as. |
 | **Everything else** | Configurable hotkeys with an Override for keys other apps have taken, start with Windows, automatic updates with checksum verification, English and Dutch, dark and light theme. |
@@ -72,16 +74,18 @@ Blink checks for updates once a day. Installing an update is one click; the down
 | Screen under the mouse | `Shift + Print Screen` |
 | Active window | `Alt + Print Screen` |
 | Scrolling page | `Ctrl + Shift + Print Screen` |
+| Copy text from the screen | `Ctrl + Alt + Print Screen` |
 | Capture menu | `Ctrl + Print Screen` |
 
-**In the capture overlay:** drag = region · click = window · hold Ctrl = inner pane · `F` this screen · `A` all screens · `S` scrolling · Space = next mode · arrow keys = move the mouse 1 px · `Esc` or right-click = cancel.
+**In the capture overlay:** drag = region · click = window · hold Ctrl = inner pane · `F` this screen · `A` all screens · `S` scrolling · `T` copy text (click = line, Ctrl + click = paragraph, drag = region) · Space = next mode · arrow keys = move the mouse 1 px · `Esc` or right-click = cancel.
 
-**In the editor:** `V` select, `R` rectangle, `E` ellipse, `S` shapes, `L` line, `A` arrow, `P` freehand, `H` highlighter, `T` text, `O` speech bubble, `N` step, `M` emoji, `B` blur, `C` crop · hold `Ctrl` to select with any tool · `Shift` = straight/square · `Ctrl+Z / Ctrl+Y` · `Ctrl+C` copy, `Ctrl+S` save, `Ctrl+Shift+S` save as · `F1` or `?` lists every shortcut.
+**In the editor:** `V` select, `X` select text (OCR), `R` rectangle, `E` ellipse, `S` shapes, `L` line, `A` arrow, `P` freehand, `H` highlighter, `T` text, `O` speech bubble, `N` step, `M` emoji, `B` blur, `C` crop · hold `Ctrl` to select with any tool · `Shift` = straight/square · `Ctrl+Z / Ctrl+Y` · `Ctrl+C` copy, `Ctrl+S` save, `Ctrl+Shift+S` save as · `F1` or `?` lists every shortcut.
 
 ## Limitations
 
 - **Windows 10 and 11, 64-bit only** for now. The editor is portable; capture, hotkeys and the tray are Windows code. See [docs/PLATFORMS.md](docs/PLATFORMS.md) for what macOS and Linux need.
-- **No OCR and no screen recording.** If you need those, ShareX or the Snipping Tool do them well.
+- **No screen recording.** If you need it, ShareX or the Snipping Tool do it well.
+- **Text recognition reads the languages installed in Windows** (Settings > Time & language > Language & region). It reads printed screen text well and handwriting poorly, and it can misread characters: *Find private info* is a help, not a guarantee.
 - **Scrolling capture** scrolls with simulated mouse wheel steps. It works in browsers, editors, chat apps and File Explorer; it can stop early on content that changes while scrolling (video, animations, lazy loading).
 - The mouse cursor is not included in screenshots.
 

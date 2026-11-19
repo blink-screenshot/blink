@@ -80,3 +80,10 @@ pub fn http_get(
 pub fn install_dir() -> Option<std::path::PathBuf> {
     None
 }
+
+/// No OCR engine outside Windows.
+pub fn ocr_engine() -> Result<Box<dyn crate::ocr::Engine>, crate::ocr::OcrError> {
+    Err(crate::ocr::OcrError::Unsupported)
+}
+
+pub fn open_language_settings() {}

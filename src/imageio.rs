@@ -141,6 +141,11 @@ pub fn copy_to_clipboard(img: &RgbaImage) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
+    let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    cb.set_text(text).map_err(|e| e.to_string())
+}
+
 pub fn image_from_clipboard() -> Result<RgbaImage, String> {
     let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     if let Ok(data) = cb.get_image() {

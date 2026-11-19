@@ -17,6 +17,8 @@ pub enum Icon {
     AllScreens,
     Window,
     Scrolling,
+    /// Copy text from the screen.
+    Text,
     OpenFile,
     Clipboard,
     Folder,
@@ -67,7 +69,7 @@ fn path(icon: Icon) -> Option<tiny_skia::Path> {
     let mut pb = PathBuilder::new();
     match icon {
         // Drawn by the mode bar (see `bitmap`).
-        Icon::Region | Icon::Fullscreen | Icon::AllScreens | Icon::Scrolling => return None,
+        Icon::Region | Icon::Fullscreen | Icon::AllScreens | Icon::Scrolling | Icon::Text => return None,
         Icon::Window => {
             rrect(&mut pb, 2.0, 4.0, 22.0, 20.0, 2.0);
             line(&mut pb, &[(2.0, 9.0), (22.0, 9.0)]);
@@ -176,6 +178,7 @@ pub fn bitmap(icon: Icon, size: u32, color: Color32) -> HBITMAP {
         Icon::Fullscreen => Some(Mode::Screen),
         Icon::AllScreens => Some(Mode::AllScreens),
         Icon::Scrolling => Some(Mode::Scroll),
+        Icon::Text => Some(Mode::Text),
         _ => None,
     };
     if let Some(mode) = mode {

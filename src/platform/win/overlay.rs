@@ -8,13 +8,23 @@
 //! the bottom of the screen while a dragged region would run under it. Its grip (left side)
 //! drags the bar anywhere on the screen, to leave the default spot free for a capture. Holding Ctrl (or
 //! being in scrolling mode) snaps to inner panes such as a browser's page area.
+//!
+//! In text mode (T) the overlay copies text instead of taking a picture. The frozen screen is
+//! read on a worker thread as soon as the mode is on; once it is, the text on the screen lights
+//! up. Pointing at text picks its line (with Ctrl: its paragraph), dragging picks the text in
+//! a region, and a click away from text picks the text of that window. The label next to the
+//! selection shows the start of the text that will be copied. A pick made before the reading is
+//! done waits for it.
 
-use super::capture::{child_windows, IRect, Shot, WinInfo};
+use super::capture::{child_windows, monitor_rects, IRect, Shot, WinInfo};
 use super::{monitor_at, wide};
 use crate::capture_bar::{self, Hit, Mode};
+use crate::i18n::t;
+use crate::ocr::{self, OcrError, Page};
 use crate::theme::{self, DARK};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::mpsc::Receiver;
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     AlphaBlend, BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, CreatePen,
@@ -27,16 +37,31 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, LoadCursorW,
-    RegisterClassExW, SetCursor, SetCursorPos, SetForegroundWindow, ShowWindow, TranslateMessage, HTCLIENT, IDC_ARROW,
-    IDC_CROSS, IDC_SIZEALL, MSG, SW_SHOW, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP,
+    PostMessageW, RegisterClassExW, SetCursor, SetCursorPos, SetForegroundWindow, ShowWindow, TranslateMessage,
+    HTCLIENT, IDC_ARROW, IDC_CROSS, IDC_SIZEALL, IDC_WAIT, MSG, SW_SHOW, WM_APP, WM_DPICHANGED, WM_ERASEBKGND,
+    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR,
+    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Outcome {
     pub rect: IRect,
     pub scroll: bool,
+    /// Text mode: the text that was picked (empty when there was none), or why it could not
+    /// be read.
+    pub text: Option<Result<String, OcrError>>,
+}
+
+/// Posted by the reading thread when the text of the screen is read.
+const TEXT_READ_MSG: u32 = WM_APP + 40;
+
+/// The text on the frozen screen (text mode).
+enum TextState {
+    /// Not asked for yet (another mode).
+    Off,
+    Reading(Receiver<Result<Page, OcrError>>),
+    Ready(Page),
+    Failed(OcrError),
 }
 
 const CLASS: &str = "BlinkOverlayWindow";
@@ -92,6 +117,18 @@ struct State {
     hover: Option<IRect>,
     dirty: Vec<IRect>,
     result: Option<Option<Outcome>>,
+    hwnd: isize,
+    /// The screenshot the overlay shows; valid while `select` runs, which is the only time
+    /// this state exists.
+    shot: *const Shot,
+    text: TextState,
+    /// Text mode, pointing at text: the lines it picks (client coordinates in `hover`).
+    text_hover: Option<Vec<usize>>,
+    /// A text pick made while the screen was still being read: the area, and the lines when
+    /// a line or paragraph was picked.
+    waiting: Option<(IRect, Option<Vec<usize>>)>,
+    /// Everything must be painted again (the lit-up text changed).
+    redraw_all: bool,
 }
 
 thread_local! {
@@ -125,8 +162,9 @@ impl Marks {
     }
 }
 
-/// Shows the overlay and runs a modal loop until the user selects or cancels.
-pub fn select(shot: &Shot, windows: Vec<WinInfo>, scroll: bool, magnifier: bool) -> Option<Outcome> {
+/// Shows the overlay and runs a modal loop until the user selects or cancels. It starts in
+/// `mode` (region / window, scrolling or text).
+pub fn select(shot: &Shot, windows: Vec<WinInfo>, mode: Mode, magnifier: bool) -> Option<Outcome> {
     unsafe {
         let hinst = GetModuleHandleW(std::ptr::null());
         let class = wide(CLASS);
@@ -157,7 +195,6 @@ pub fn select(shot: &Shot, windows: Vec<WinInfo>, scroll: bool, magnifier: bool)
         let (Some(bright), Some(dim)) = (bright, dim) else {
             return None;
         };
-        let mode = if scroll { Mode::Scroll } else { Mode::Region };
         let state = State {
             origin: (r.x, r.y),
             size: (r.w, r.h),
@@ -179,6 +216,12 @@ pub fn select(shot: &Shot, windows: Vec<WinInfo>, scroll: bool, magnifier: bool)
             hover: None,
             dirty: Vec::new(),
             result: None,
+            hwnd: 0,
+            shot: shot as *const Shot,
+            text: TextState::Off,
+            text_hover: None,
+            waiting: None,
+            redraw_all: false,
         };
         STATE.with(|s| *s.borrow_mut() = Some(state));
 
@@ -200,7 +243,13 @@ pub fn select(shot: &Shot, windows: Vec<WinInfo>, scroll: bool, magnifier: bool)
             cleanup();
             return None;
         }
-        with_state(|s| update_hover(s));
+        with_state(|s| {
+            s.hwnd = hwnd as isize;
+            if s.mode == Mode::Text {
+                start_reading(s);
+            }
+            update_hover(s);
+        });
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
         SetFocus(hwnd);
@@ -333,6 +382,8 @@ fn cursor_monitor_rect(s: &State) -> IRect {
 }
 
 fn update_hover(s: &mut State) {
+    s.text_hover = None;
+    let ctrl = unsafe { GetKeyState(VK_CONTROL as i32) } < 0;
     match s.mode {
         Mode::Screen => {
             s.hover = Some(cursor_monitor_rect(s));
@@ -342,10 +393,33 @@ fn update_hover(s: &mut State) {
             s.hover = Some(client_bounds(s));
             return;
         }
+        Mode::Text => {
+            // On text: its line, or with Ctrl its paragraph. Elsewhere: the window, as in
+            // region mode.
+            if let TextState::Ready(page) = &s.text {
+                let (x, y) = (s.cur.0 as f32, s.cur.1 as f32);
+                if let Some(li) = page.line_at(x, y, 4.0 * s.scale) {
+                    let lines: Vec<usize> = if ctrl { page.paragraph(li).collect() } else { vec![li] };
+                    let r = lines.iter().map(|&l| page.lines[l].rect()).reduce(|a, b| a.union(&b));
+                    if let Some(r) = r {
+                        let r = r.expand(3.0 * s.scale);
+                        let rect = IRect::from_ltrb(
+                            r.x.floor() as i32,
+                            r.y.floor() as i32,
+                            r.right().ceil() as i32,
+                            r.bottom().ceil() as i32,
+                        );
+                        s.hover = Some(rect.intersect(&client_bounds(s)));
+                        s.text_hover = Some(lines);
+                        return;
+                    }
+                }
+            }
+        }
         Mode::Region | Mode::Scroll => {}
     }
     let (x, y) = (s.cur.0 + s.origin.0, s.cur.1 + s.origin.1);
-    let deep = s.mode == Mode::Scroll || unsafe { GetKeyState(VK_CONTROL as i32) } < 0;
+    let deep = s.mode == Mode::Scroll || ctrl;
     let top = s.windows.iter().find(|w| w.rect.contains(x, y)).copied();
     let mut hover = top.map(|w| w.rect);
     if let (true, Some(top)) = (deep, top) {
@@ -362,6 +436,107 @@ fn update_hover(s: &mut State) {
         Some(r) => to_client(s, r).intersect(&client_bounds(s)),
         None => cursor_monitor_rect(s),
     });
+}
+
+// ---- text --------------------------------------------------------------------------------
+
+/// Starts reading the text of the frozen screen on a worker thread, one monitor at a time
+/// (each at its own size, so small text stays readable on a wide desktop).
+fn start_reading(s: &mut State) {
+    if !matches!(s.text, TextState::Off) {
+        return;
+    }
+    // Safe: the state, and with it this pointer, only exists while `select` runs.
+    let shot = unsafe { &*s.shot };
+    let mut parts: Vec<(IRect, Vec<u8>)> = monitor_rects().into_iter().filter_map(|m| shot.crop_bgra(m)).collect();
+    if parts.is_empty() {
+        parts.extend(shot.crop_bgra(shot.rect));
+    }
+    let origin = (shot.rect.x, shot.rect.y);
+    let hwnd = s.hwnd;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let read = || -> Result<Page, OcrError> {
+            let engine = crate::platform::ocr_engine()?;
+            let mut page = Page::default();
+            for (r, bgra) in parts {
+                let mut part = ocr::read_with(engine.as_ref(), &bgra, r.w as u32, r.h as u32)?;
+                part.translate((r.x - origin.0) as f32, (r.y - origin.1) as f32);
+                page.append(part);
+            }
+            Ok(page)
+        };
+        let _ = tx.send(read());
+        unsafe {
+            PostMessageW(hwnd as HWND, TEXT_READ_MSG, 0, 0);
+        }
+    });
+    s.text = TextState::Reading(rx);
+}
+
+/// The reading thread is done: the text lights up, and a pick that waited for it is finished.
+fn text_read(s: &mut State) {
+    let TextState::Reading(rx) = &s.text else { return };
+    let Ok(result) = rx.try_recv() else { return };
+    s.text = match result {
+        Ok(page) => TextState::Ready(page),
+        Err(e) => TextState::Failed(e),
+    };
+    s.redraw_all = true;
+    update_hover(s);
+    if let Some((rect, lines)) = s.waiting.take() {
+        finish_text(s, rect, lines);
+    }
+}
+
+/// The text a text-mode pick copies: whole lines, or the words inside `rect`.
+fn picked_text(page: &Page, rect: IRect, lines: Option<&[usize]>) -> String {
+    match lines {
+        Some(lines) => page.lines_text(lines),
+        None => {
+            let b = ocr::Bounds::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
+            page.text_of(&page.words_in(&b))
+        }
+    }
+}
+
+/// What the label next to the selection says in text mode: the start of the text that will
+/// be copied, or why there is none (yet).
+fn text_label(s: &State, sel: IRect) -> String {
+    if s.waiting.is_some() {
+        return t("Reading text\u{2026}").to_string();
+    }
+    match &s.text {
+        TextState::Off | TextState::Reading(_) => t("Reading text\u{2026}").to_string(),
+        TextState::Failed(_) => t("Text recognition is not available").to_string(),
+        TextState::Ready(page) => {
+            let lines = if s.dragging { None } else { s.text_hover.as_deref() };
+            let text = picked_text(page, sel, lines);
+            if text.is_empty() {
+                t("No text here").to_string()
+            } else {
+                ocr::preview(&text, 48)
+            }
+        }
+    }
+}
+
+/// Ends the overlay with the text of a pick, or waits for the reading to finish.
+fn finish_text(s: &mut State, rect: IRect, lines: Option<Vec<usize>>) {
+    let text = match &s.text {
+        TextState::Ready(page) => Ok(picked_text(page, rect, lines.as_deref())),
+        TextState::Failed(e) => Err(e.clone()),
+        TextState::Off | TextState::Reading(_) => {
+            start_reading(s);
+            s.waiting = Some((rect, lines));
+            return;
+        }
+    };
+    s.result = Some(Some(Outcome {
+        rect: IRect { x: rect.x + s.origin.0, y: rect.y + s.origin.1, ..rect },
+        scroll: false,
+        text: Some(text),
+    }));
 }
 
 // ---- corner marks ----------------------------------------------------------------------
@@ -581,7 +756,7 @@ unsafe fn decorations(s: &State, dc: HDC, draw: bool) -> Vec<IRect> {
         regions.push(marks);
         // Size label above the selection (inside if there is no room), in the same color as
         // the marks like the crop tool in the editor.
-        let text = format!("{} × {}", sel.w, sel.h);
+        let text = if s.mode == Mode::Text { text_label(s, sel) } else { format!("{} × {}", sel.w, sel.h) };
         if let Some(label) = capture_bar::label(&text, s.mode.color(), None, theme::INK, sc, fonts) {
             let (lw, lh) = (label.width() as i32, label.height() as i32);
             let gap = mark_w + (6.0 * sc) as i32;
@@ -674,6 +849,24 @@ unsafe fn paint(hwnd: HWND) {
         let (w, h) = (p.right - p.left, p.bottom - p.top);
         let back = s.back.dc;
         BitBlt(back, p.left, p.top, w, h, s.dim.dc, p.left, p.top, SRCCOPY);
+        // Text mode: the text that was read lights up on the dimmed screen.
+        if let (Mode::Text, TextState::Ready(page)) = (s.mode, &s.text) {
+            let paint_rect = IRect::from_ltrb(p.left, p.top, p.right, p.bottom);
+            let pad = (2.0 * s.scale).round() as i32;
+            for line in &page.lines {
+                let r = line.rect();
+                let r = IRect::from_ltrb(
+                    r.x.floor() as i32 - pad,
+                    r.y.floor() as i32 - pad,
+                    r.right().ceil() as i32 + pad,
+                    r.bottom().ceil() as i32 + pad,
+                )
+                .intersect(&paint_rect);
+                if !r.is_empty() {
+                    BitBlt(back, r.x, r.y, r.w, r.h, s.bright.dc, r.x, r.y, SRCCOPY);
+                }
+            }
+        }
         decorations(s, back, true);
         BitBlt(hdc, p.left, p.top, w, h, back, p.left, p.top, SRCCOPY);
     });
@@ -682,6 +875,12 @@ unsafe fn paint(hwnd: HWND) {
 
 /// Invalidates the old and new decoration areas only (keeps 4K/multi-monitor smooth).
 fn refresh(hwnd: HWND) {
+    let all = with_state(|s| std::mem::take(&mut s.redraw_all)).unwrap_or(false);
+    if all {
+        unsafe {
+            InvalidateRect(hwnd, std::ptr::null(), 0);
+        }
+    }
     let regions = with_state(|s| {
         let new = unsafe { decorations(s, s.back.dc, false) };
         let mut all = std::mem::replace(&mut s.dirty, new.clone());
@@ -701,16 +900,31 @@ fn refresh(hwnd: HWND) {
 /// shows the new mode.
 fn set_mode(s: &mut State, mode: Mode) {
     if s.mode != mode {
+        // The lit-up text comes and goes with text mode.
+        s.redraw_all = s.mode == Mode::Text || mode == Mode::Text;
         s.mode = mode;
         s.bar = capture_bar::Layout::new(mode, s.scale, capture_bar::fonts());
+        if mode == Mode::Text {
+            start_reading(s);
+        }
     }
     update_hover(s);
 }
 
 fn finish(s: &mut State, rect: Option<IRect>) {
+    if s.mode == Mode::Text {
+        let Some(r) = rect.filter(|r| !r.is_empty()) else {
+            s.result = Some(None);
+            return;
+        };
+        // A click on text (not a drag) copies the lines it points at.
+        let lines = if !s.dragging && Some(r) == s.hover { s.text_hover.clone() } else { None };
+        return finish_text(s, r, lines);
+    }
     s.result = Some(rect.filter(|r| !r.is_empty()).map(|r| Outcome {
         rect: IRect { x: r.x + s.origin.0, y: r.y + s.origin.1, ..r },
         scroll: s.mode == Mode::Scroll,
+        text: None,
     }));
 }
 
@@ -722,6 +936,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_ERASEBKGND => 1,
         WM_DPICHANGED => 0, // keep covering the whole virtual screen, never rescale
+        TEXT_READ_MSG => {
+            with_state(text_read);
+            refresh(hwnd);
+            0
+        }
         WM_MOUSEMOVE => {
             let (x, y) = lparam_xy(lp);
             with_state(|s| {
@@ -747,6 +966,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let mut pt = POINT { x: 0, y: 0 };
             GetCursorPos(&mut pt);
             let cursor = with_state(|s| {
+                if s.waiting.is_some() {
+                    return IDC_WAIT;
+                }
                 if s.bar_grab.is_some() {
                     return IDC_SIZEALL;
                 }
@@ -762,6 +984,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_LBUTTONDOWN => {
             let (x, y) = lparam_xy(lp);
+            // Waiting for the text of a pick: only Esc or a right-click (cancel) count now.
+            if with_state(|s| s.waiting.is_some()).unwrap_or(false) {
+                return 0;
+            }
             // A click on the mode bar switches modes (or cancels) and never starts a capture;
             // on the grip it picks the bar up.
             let capture = with_state(|s| match bar_at(s, x, y) {
@@ -804,6 +1030,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     finish(s, sel);
                 }
             });
+            // A text pick may wait for the reading: show that.
+            refresh(hwnd);
             0
         }
         WM_RBUTTONUP => {
@@ -813,6 +1041,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_KEYDOWN => {
             let vk = wp as u32;
             let mut nudge = None;
+            let waiting = with_state(|s| s.waiting.is_some()).unwrap_or(false);
+            if waiting && vk != 0x1B {
+                return 0;
+            }
             with_state(|s| match vk {
                 0x1B => s.result = Some(None), // Esc
                 0x0D => {
@@ -831,9 +1063,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     let next = if s.mode == Mode::Scroll { Mode::Region } else { Mode::Scroll };
                     set_mode(s, next);
                 }
+                0x54 => {
+                    let next = if s.mode == Mode::Text { Mode::Region } else { Mode::Text };
+                    set_mode(s, next);
+                }
                 // Space: next mode. Ignore auto-repeat so holding it down does not spin through.
                 0x20 if lp & (1 << 30) == 0 => set_mode(s, s.mode.next()),
-                0x11 => update_hover(s), // Ctrl pressed: switch to inner panes
+                0x11 => update_hover(s), // Ctrl pressed: inner panes, or a paragraph of text
                 0x25 => nudge = Some((-1, 0)),
                 0x26 => nudge = Some((0, -1)),
                 0x27 => nudge = Some((1, 0)),

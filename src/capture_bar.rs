@@ -1,7 +1,7 @@
 //! The mode bar of the capture overlay, and the small labels around the selection.
 //!
 //! The bar sits at the top of the screen while you pick what to capture. Its top row shows
-//! the four capture modes as segments, the active one in the accent (cyan for scrolling
+//! the capture modes as segments, the active one in the accent (cyan for scrolling
 //! capture), the way the editor shows its active tool; a click on a segment switches to that
 //! mode. The second row says what the mouse and the keys do in the current mode. A grip on
 //! the left side of the bar, as high as the bar, lets you drag the whole bar out of the way.
@@ -31,17 +31,21 @@ pub enum Mode {
     AllScreens,
     /// Scrolling capture of the area you pick.
     Scroll,
+    /// Copies the text you point at (a line, a paragraph or a dragged region) instead of an
+    /// image.
+    Text,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 4] = [Mode::Region, Mode::Screen, Mode::AllScreens, Mode::Scroll];
+    pub const ALL: [Mode; 5] = [Mode::Region, Mode::Screen, Mode::AllScreens, Mode::Scroll, Mode::Text];
 
     pub fn next(self) -> Mode {
         match self {
             Mode::Region => Mode::Screen,
             Mode::Screen => Mode::AllScreens,
             Mode::AllScreens => Mode::Scroll,
-            Mode::Scroll => Mode::Region,
+            Mode::Scroll => Mode::Text,
+            Mode::Text => Mode::Region,
         }
     }
 
@@ -51,17 +55,20 @@ impl Mode {
             Mode::Screen => t("This screen"),
             Mode::AllScreens => t("All screens"),
             Mode::Scroll => t("Scrolling"),
+            Mode::Text => t("Text"),
         }
     }
 
     /// The key for this mode: F and A capture the screen(s) right away, S switches to
-    /// scrolling capture. Region / window is where the overlay starts, so it has none.
+    /// scrolling capture, T to copying text. Region / window is where the overlay starts, so
+    /// it has none.
     pub fn key(self) -> Option<&'static str> {
         match self {
             Mode::Region => None,
             Mode::Screen => Some("F"),
             Mode::AllScreens => Some("A"),
             Mode::Scroll => Some("S"),
+            Mode::Text => Some("T"),
         }
     }
 
@@ -92,6 +99,13 @@ impl Mode {
             ],
             Mode::Scroll => vec![
                 (vec![click], t("scrollable area")),
+                (vec![drag], t("region")),
+                (vec![space], t("next mode")),
+                (vec![esc], t("cancel")),
+            ],
+            Mode::Text => vec![
+                (vec![click], t("line")),
+                (vec!["Ctrl", click], t("paragraph")),
                 (vec![drag], t("region")),
                 (vec![space], t("next mode")),
                 (vec![esc], t("cancel")),
@@ -300,6 +314,7 @@ enum Icon {
     Screen,
     AllScreens,
     Scroll,
+    Text,
     Close,
 }
 
@@ -313,13 +328,17 @@ fn icon(pix: &mut Pixmap, which: Icon, a: Area, c: Color32, bg: Color32) {
 /// transparent pixmap, with lines `weight` grid units (of 18) wide. The tray menu uses these,
 /// so a mode looks the same everywhere.
 pub fn mode_icon(pix: &mut Pixmap, mode: Mode, x: f32, y: f32, size: f32, c: Color32, weight: f32) {
-    let which = match mode {
+    icon_weighted(pix, mode_glyph(mode), Area { x, y, w: size, h: size }, c, None, weight);
+}
+
+fn mode_glyph(mode: Mode) -> Icon {
+    match mode {
         Mode::Region => Icon::Region,
         Mode::Screen => Icon::Screen,
         Mode::AllScreens => Icon::AllScreens,
         Mode::Scroll => Icon::Scroll,
-    };
-    icon_weighted(pix, which, Area { x, y, w: size, h: size }, c, None, weight);
+        Mode::Text => Icon::Text,
+    }
 }
 
 /// `icon` with its line width in grid units. Without `bg` the back monitor of "all screens"
@@ -382,6 +401,20 @@ fn icon_weighted(pix: &mut Pixmap, which: Icon, a: Area, c: Color32, bg: Option<
         Icon::Scroll => {
             stroke(pix, rrect(area(3.0, 2.0, 12.0, 14.0), [2.4 * u; 4]), c, width);
             stroke(pix, lines(&[&[(9.0, 6.0), (9.0, 12.0)], &[(6.8, 9.8), (9.0, 12.0), (11.2, 9.8)]]), c, width);
+        }
+        Icon::Text => {
+            // The logo's corners, smaller, around a "T": the text inside a capture.
+            let mut pb = PathBuilder::new();
+            for (sx, sy) in [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
+                let at = |dx: f32, dy: f32| p(9.0 + sx * dx, 9.0 + sy * dy);
+                let (x, y) = at(7.5, 4.5);
+                pb.move_to(x, y);
+                let (cx, cy) = at(7.5, 7.5);
+                let (x, y) = at(4.5, 7.5);
+                pb.quad_to(cx, cy, x, y);
+            }
+            stroke(pix, pb.finish(), c, width);
+            stroke(pix, lines(&[&[(5.8, 5.6), (12.2, 5.6)], &[(9.0, 5.6), (9.0, 12.6)]]), c, width);
         }
         Icon::Close => {
             stroke(pix, lines(&[&[(5.0, 5.0), (13.0, 13.0)], &[(13.0, 5.0), (5.0, 13.0)]]), c, width * 1.06);
@@ -621,13 +654,7 @@ impl Layout {
                 fill(&mut pix, rrect(a, [seg_r; 4]), bg, 1.0);
             }
             let fg = if active { theme::INK } else { DARK.text };
-            let which = match s.mode {
-                Mode::Region => Icon::Region,
-                Mode::Screen => Icon::Screen,
-                Mode::AllScreens => Icon::AllScreens,
-                Mode::Scroll => Icon::Scroll,
-            };
-            icon(&mut pix, which, at(s.icon), fg, bg);
+            icon(&mut pix, mode_glyph(s.mode), at(s.icon), fg, bg);
             draw_text(&mut pix, semi, LABEL_EM * sc, s.label_x + m, a.cy(), fg, s.mode.label());
             if let (Some(k), Some(text)) = (s.key, s.mode.key()) {
                 let (face, rim) = if active {
