@@ -241,6 +241,14 @@
   .notes { margin-top: 18px; color: var(--muted); font-size: .9rem; display: grid; gap: 6px; }
   .honest { margin-top: 28px; }
 
+  /* lightbox: screenshots open larger on click */
+  img.zoomable { cursor: zoom-in; }
+  dialog.lightbox { max-width: none; max-height: none; width: 100vw; height: 100vh; margin: 0; padding: 16px; border: 0; background: rgba(5, 6, 8, .92); display: none; align-items: center; justify-content: center; cursor: zoom-out; }
+  dialog.lightbox[open] { display: flex; }
+  dialog.lightbox::backdrop { background: transparent; }
+  dialog.lightbox img { max-width: min(100%, 1600px); max-height: calc(100vh - 32px); width: auto; height: auto; border-radius: 10px; box-shadow: 0 24px 70px -20px rgba(0, 0, 0, .8); }
+  dialog.lightbox button { position: absolute; top: 12px; right: 12px; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--group); color: var(--text); font-size: 1.5rem; line-height: 1; cursor: pointer; }
+
   /* support */
   .support { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 26px; }
 </style>
@@ -273,7 +281,7 @@
       <div class="hero-copy">
         <p class="eyebrow">Free and open-source screenshot tool for Windows</p>
         <h1>Screenshots that look <span class="hl">finished</span> the moment you take them.</h1>
-        <p class="lead">Capture a region, a window or a whole scrolling page. Mark it up, black out what is private, and put it on a background or a device. One small app that starts with Windows and stays out of your way.</p>
+        <p class="lead">Capture a region, a window or a whole scrolling page. Mark it up, black out what is private, and put it on a background or a device. One small, native app, written in Rust, that starts with Windows and stays out of your way.</p>
         <div class="cta-row">
           <a class="btn primary" href="https://github.com/blink-screenshot/blink/releases/latest/download/Blink-Setup.exe">Download for Windows</a>
           <a class="btn" href="https://github.com/blink-screenshot/blink">View the source on GitHub</a>
@@ -436,8 +444,9 @@
   <section class="block alt" id="details">
     <div class="wrap">
       <div class="head">
-        <p class="eyebrow">Built to be forgotten</p>
+        <p class="eyebrow">Built in Rust</p>
         <h2>Light when idle. Quick when you need it.</h2>
+        <p class="lead">Blink is written in Rust and compiles to native Windows code: no Electron, no browser engine, no runtime to install. The whole app is one exe of about 7 MB.</p>
       </div>
       <div class="grid">
         <div class="card">
@@ -457,8 +466,8 @@
           <p>Blink speaks English and Dutch and comes in a dark and a light theme, or follows the Windows setting.</p>
         </div>
         <div class="card">
-          <h3>Updates that verify themselves</h3>
-          <p>Blink checks once a day for a new version. If you install it, the download is verified with its SHA-256 checksum before it runs. You can switch the check off, or skip a version.</p>
+          <h3>Native and memory-safe</h3>
+          <p>Rust gives native speed without a garbage collector, and its compiler rules out most memory bugs before Blink ever runs. That matters for an app that runs all day and reads your screen.</p>
         </div>
         <div class="card">
           <h3>Your screenshots stay on your PC</h3>
@@ -648,7 +657,34 @@
     </nav>
   </div>
 </footer>
+<dialog class="lightbox" aria-label="Enlarged screenshot">
+  <img alt="">
+  <button type="button" aria-label="Close">&times;</button>
+</dialog>
 <script>
+  // Screenshots open larger in a lightbox: click, Enter or Space; Esc, a click or the button closes it.
+  (function () {
+    var box = document.querySelector("dialog.lightbox");
+    if (!box || !box.showModal) return;
+    var big = box.querySelector("img");
+    document.querySelectorAll("main figure img, main .window img").forEach(function (img) {
+      img.classList.add("zoomable");
+      img.tabIndex = 0;
+      img.setAttribute("role", "button");
+      img.setAttribute("aria-label", "Enlarge: " + img.alt);
+      function open() {
+        big.src = img.currentSrc || img.src;
+        big.alt = img.alt;
+        box.showModal();
+      }
+      img.addEventListener("click", open);
+      img.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+      });
+    });
+    box.addEventListener("click", function () { box.close(); });
+  })();
+
   // Donation links that still hold a placeholder are hidden, so the page never shows a dead link.
   document.querySelectorAll("[data-donate]").forEach(function (a) {
     if (a.href.indexOf("YOUR-") !== -1) a.remove();
