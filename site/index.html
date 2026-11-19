@@ -265,6 +265,7 @@
     <nav class="main" aria-label="Main">
       <a href="#capture">Capture</a>
       <a href="#edit">Edit</a>
+      <a href="#private">Private info</a>
       <a href="#present">Present</a>
       <a href="#compare">Compare</a>
       <a href="#faq">FAQ</a>
@@ -400,7 +401,7 @@
           <p>For passwords and API keys, use the <b>black box</b>. It removes the content completely, and the editor tells you so.</p>
           <ul class="ticks">
             <li>Blur, pixelate or black box, with adjustable strength</li>
-            <li>Click a word, key or e-mail address to hide it. <b>Find private info</b> suggests what to hide (e-mail addresses, phone numbers, IBANs, card numbers, IP addresses, keys and tokens, passwords, BSN), and you confirm. It is a help, not a guarantee.</li>
+            <li>Click a word, key or e-mail address to hide it. <a href="#private"><b>Find private info</b></a> suggests what to hide (e-mail addresses, phone numbers, IBANs, card numbers, IP addresses, keys and tokens, passwords, BSN), and you confirm. It is a help, not a guarantee.</li>
             <li>What you see is what you export: the editor and the export use the same renderer</li>
           </ul>
         </div>
@@ -415,8 +416,59 @@
     </div>
   </section>
 
+  <!-- PRIVATE INFO -->
+  <section class="block" id="private">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">Find private info</p>
+        <h2>One click to find what should not be shared.</h2>
+        <p class="lead">Before you paste a screenshot into a ticket, a chat or a slide, Blink reads it and marks everything that looks private. You check the suggestions and hide them all in one step.</p>
+      </div>
+
+      <div class="row">
+        <div class="copy">
+          <h3>Blink finds it, you decide</h3>
+          <p>Press <b>Find private info</b> in the redaction tool. Every finding gets a box; click a box to leave it out, pick blur, pixelate or black box, and press <b>Hide</b>. One undo brings everything back.</p>
+          <ul class="ticks">
+            <li><b>E-mail addresses, phone numbers, IP addresses</b></li>
+            <li><b>IBANs and card numbers</b>, checked with their own checksum (mod 97, Luhn) to keep false alarms down</li>
+            <li><b>API keys, tokens and passwords</b>: well-known key formats, long random strings, and values after labels such as <i>Password:</i> or <i>token =</i></li>
+            <li><b>Dutch citizen service numbers (BSN)</b>, checked with the elfproef</li>
+            <li>Or click a single word or key to hide just that one</li>
+          </ul>
+          <p style="margin-top:14px">It is a suggestion, not a guarantee: text recognition can misread a character or miss text in an image. Always give the screenshot a last look.</p>
+        </div>
+        <figure>
+          <div class="window">
+            <img src="img/editor-private.png" width="1320" height="760" loading="lazy" alt="The Blink editor after Find private info: pink boxes around four e-mail addresses, four phone numbers, an IBAN, two API keys, an IP address and a password on a team settings page, with a bar above that says Found 13 items that look private and a Hide 13 button.">
+          </div>
+          <figcaption>13 suggestions on a team settings page, each one can be turned off.</figcaption>
+        </figure>
+      </div>
+
+      <div class="row flip">
+        <div class="copy">
+          <h3>Read on your PC. Never in the cloud.</h3>
+          <p>Text recognition uses the OCR engine that is built into Windows 10 and 11. It runs on your own PC and works without an internet connection. Blink does not send your screenshot, the text it reads or what it finds to any server: no cloud OCR, no AI service, nothing stored somewhere else.</p>
+          <ul class="ticks">
+            <li>Works offline, also on a plane or behind a strict company firewall</li>
+            <li>No download and no account: Windows already has the engine</li>
+            <li>The same engine powers <b>copy text from the screen</b> and selecting text in the editor</li>
+            <li>The code is open source, so anyone can check this</li>
+          </ul>
+        </div>
+        <figure>
+          <div class="window">
+            <img src="img/editor-private-hidden.png" width="1320" height="760" loading="lazy" alt="The same team settings page after pressing Hide: all e-mail addresses, phone numbers, the IBAN, the keys, the IP address and the password are blurred, and a message says Hid 13 items.">
+          </div>
+          <figcaption>One click on Hide 13 later. The names stay readable, the private data does not.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
   <!-- PRESENT -->
-  <section class="block" id="present">
+  <section class="block alt" id="present">
     <div class="wrap">
       <div class="head">
         <p class="eyebrow">Present</p>
@@ -444,7 +496,7 @@
   </section>
 
   <!-- DETAILS -->
-  <section class="block alt" id="details">
+  <section class="block" id="details">
     <div class="wrap">
       <div class="head">
         <p class="eyebrow">Built in Rust</p>
@@ -481,7 +533,7 @@
   </section>
 
   <!-- COMPARE -->
-  <section class="block" id="compare">
+  <section class="block alt" id="compare">
     <div class="wrap">
       <div class="head">
         <p class="eyebrow">Compare</p>
@@ -541,7 +593,7 @@
   </section>
 
   <!-- DOWNLOAD -->
-  <section class="block alt" id="download">
+  <section class="block" id="download">
     <div class="wrap">
       <div class="head">
         <p class="eyebrow">Download</p>
@@ -590,7 +642,7 @@
   </section>
 
   <!-- FAQ -->
-  <section class="block" id="faq">
+  <section class="block alt" id="faq">
     <div class="wrap" style="max-width: 820px">
       <div class="head">
         <p class="eyebrow">FAQ</p>
@@ -608,6 +660,10 @@
       <details>
         <summary>Does Blink upload my screenshots anywhere?</summary>
         <p>No. Screenshots are kept in memory, in your clipboard, or in the folder you choose. The only network request Blink makes is a daily check for a new version on GitHub, which you can turn off.</p>
+      </details>
+      <details>
+        <summary>Where is the text in my screenshots read?</summary>
+        <p>On your own PC. Copying text and <i>Find private info</i> use the OCR engine built into Windows, which works offline. Blink sends no image and no text to any server or AI service for it.</p>
       </details>
       <details>
         <summary>Print Screen still opens the Snipping Tool.</summary>
@@ -633,7 +689,7 @@
   </section>
 
   <!-- SUPPORT -->
-  <section class="block alt final" id="support">
+  <section class="block final" id="support">
     <div class="wrap">
       <p class="eyebrow">Support Blink</p>
       <h2 style="margin-top:12px">Free to use. Kept alive by people who use it.</h2>

@@ -424,6 +424,7 @@ const KEY_PREFIXES: &[&str] = &[
     "rk_live_",
     "rk_test_",
     "pk_live_",
+    "whsec_",
     "ghp_",
     "gho_",
     "ghu_",
@@ -637,6 +638,8 @@ mod tests {
     fn keys_and_tokens() {
         assert_eq!(one("OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuv").0, "sk-proj-abcdefghijklmnopqrstuv");
         assert_eq!(one("token ghp_16C7e42F292c6912E7710c838347Ae178B4a").1, Kind::Secret);
+        // Stripe webhook secret: lowercase and digits only, so only its prefix gives it away.
+        assert_eq!(one("whsec_9f3a7c1e5b8d2f6a4c0e7b9d").1, Kind::Secret);
         assert_eq!(one("AKIAIOSFODNN7EXAMPLE").1, Kind::Secret);
         assert_eq!(one("sha 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b").1, Kind::Secret);
         // After a label, also when it does not look random.
