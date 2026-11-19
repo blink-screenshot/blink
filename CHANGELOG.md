@@ -2,6 +2,12 @@
 
 All notable changes to Blink, per version. Every version is on [GitHub](https://github.com/blink-screenshot/blink/releases) with its installer; the release notes are taken from this file.
 
+## [1.1.3] - 2026-11-19
+
+### Improvements
+
+- **Find private info finds shorter keys.** A random-looking run of 12 or more letters and digits (upper case, lower case and digits mixed, like `Xk9mP2vL7qR4tZ` or the end of `pk_test_51H8aBcD2eFgH3iJ`) is now suggested as a key; before, it took 20. Licence names, version numbers and ordinary words with digits are still left alone.
+
 ## [1.1.2] - 2026-11-19
 
 ### Improvements

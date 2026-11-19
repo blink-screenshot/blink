@@ -484,15 +484,41 @@ fn entropy(s: &str) -> f32 {
         .sum()
 }
 
-/// Long random-looking strings: keys and tokens without a known prefix, and long hex
-/// strings (32+ characters: API keys, but also commit hashes, which are left to the user).
+/// Shortest run of letters and digits (between "-", ".", "_", "/", "+" or "=") that counts as
+/// a key on its own. Checked against the code and text in this repository: at 12 a run must
+/// still mix upper case, lower case and digits and look random, which licence names
+/// ("Apache-2.0") and version strings never do; code names like "Base64Encoder" sometimes do.
+const MIN_RANDOM_RUN: usize = 12;
+
+/// Whether a run of letters and digits looks random: upper case, lower case and digits, and
+/// close to the most varied a string of its length can be.
+fn random_run(run: &str) -> bool {
+    let n = run.chars().count();
+    n >= MIN_RANDOM_RUN
+        && run.chars().all(|c| c.is_ascii_alphanumeric())
+        && run.chars().any(|c| c.is_ascii_uppercase())
+        && run.chars().any(|c| c.is_ascii_lowercase())
+        && run.chars().any(|c| c.is_ascii_digit())
+        && entropy(run) >= 0.85 * (n as f32).log2().min(4.5)
+}
+
+/// Random-looking strings: keys and tokens without a known prefix (20+ characters, or one
+/// random run of 12+ like the end of "pk_test_51H8aBcD2eFgH3iJ"), and long hex strings (32+
+/// characters: API keys, but also commit hashes, which are left to the user).
 fn generic_secrets(s: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     for (a, b) in tokens(s) {
         let tok = &s[a..b];
         let start = tok.rfind(['=', ':']).map_or(0, |i| i + 1);
         let value = &tok[start..];
-        if value.len() < 20 || !value.chars().all(token_chars) || value.contains("://") {
+        if value.len() < MIN_RANDOM_RUN || !value.chars().all(token_chars) || value.contains("://") {
+            continue;
+        }
+        if value.split(['-', '.', '_', '/', '+', '=']).any(random_run) {
+            out.push((a + start, b));
+            continue;
+        }
+        if value.len() < 20 {
             continue;
         }
         let hex = value.len() >= 32 && value.chars().all(|c| c.is_ascii_hexdigit());
@@ -702,6 +728,27 @@ mod tests {
             "Supercalifragilisticexpialidocious",
         ] {
             assert!(kinds(s).is_empty(), "{s}: {:?}", kinds(s));
+        }
+    }
+
+    #[test]
+    fn short_random_keys() {
+        for key in ["Xk9mP2vL7qR4tZ", "pk_test_51H8aBcD2eFgH3iJ", "q7W2e9R4t1Y6", "token=Hq7Zp2Lx9Vb4"] {
+            assert_eq!(kinds(key).len(), 1, "{key:?}");
+            assert_eq!(kinds(key)[0].1, Kind::Secret, "{key:?}");
+        }
+        // Words with digits that are not random: licences, versions, code names, products.
+        for s in [
+            "Apache-2.0 or MIT/Apache-2.0",
+            "BSD-3-Clause",
+            "GPL-3.0-or-later",
+            "4K/multi-monitor",
+            "Utf8String OAuth2Token H264Decoder IPv4Address",
+            "iPhone15 Windows11 x86_64 SHA256",
+            "Ubuntu-font-1.0",
+            "Order 2026-11-19-AB12",
+        ] {
+            assert!(kinds(s).is_empty(), "{s:?}: {:?}", kinds(s));
         }
     }
 
