@@ -19,7 +19,7 @@ A free, open-source screenshot tool for Windows: capture a region, a window or a
 
 [Website](https://blink-screenshot.github.io/blink/) · [Download](https://github.com/blink-screenshot/blink/releases/latest) · [Changelog](CHANGELOG.md) · [Report a bug](https://github.com/blink-screenshot/blink/issues/new/choose)
 
-<img src="site/img/editor-frame.png" width="860" alt="The Blink editor with an annotated dashboard screenshot on a hot pink background, with the background panel open">
+<img src="site/img/promo.png" width="860" alt="Blink: from screenshot to share-ready in one go. Capture a region, window or scrolling page; annotate with arrows, numbered steps, callouts and emoji; let offline OCR find e-mail addresses, phone numbers, API keys and secrets and blur them; present the result on one of 17 backgrounds or in one of 18 device mockups. Native Windows code, written in Rust.">
 
 </div>
 
