@@ -1,0 +1,93 @@
+name: Promote
+
+# Makes a pre-release the "latest" release: from then on the in-app updater offers it to every
+# user, and releases/latest/download/Blink-Setup.exe (README, site) points to it.
+#
+# Before running this: install the pre-release (download it from its release page), check that
+# Blink starts and works, and check the update itself (install the previous version, then
+# update with the tray icon > Check for updates; that needs the version to be promoted, so
+# alternatively run the downloaded Blink-Setup-x.y.z.exe /S /RESTART over the previous one).
+#
+# Rollback: run this with an OLDER version and "rollback" checked. That version becomes latest
+# again and every newer release becomes a pre-release, so no one else gets the bad version.
+# Users who already updated keep it (the updater never downgrades): ship a fixed version.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to promote, like 2.3.2 (empty: the newest pre-release)"
+        required: false
+        default: ""
+      rollback:
+        description: "Allow promoting a version older than the current latest (and demote the newer ones)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      INPUT_VERSION: ${{ inputs.version }}
+      ROLLBACK: ${{ inputs.rollback }}
+    steps:
+      - name: Promote
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Every published (non-draft) release: tag and pre-release flag, newest version first.
+          gh release list --limit 200 --exclude-drafts --json tagName,isPrerelease \
+            --jq '.[] | "\(.tagName) \(.isPrerelease)"' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+ ' \
+            | sort -rV -k1,1 > releases.txt
+          cat releases.txt
+
+          version="${INPUT_VERSION#v}"
+          if [ -z "$version" ]; then
+            tag=$(awk '$2 == "true" { print $1; exit }' releases.txt)
+            [ -n "$tag" ] || { echo "::error::There is no pre-release to promote."; exit 1; }
+          else
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$version' is not a version like 2.3.2."; exit 1; }
+            tag="v$version"
+            grep -q "^$tag " releases.txt || { echo "::error::There is no release $tag."; exit 1; }
+          fi
+
+          # The updater downloads Blink-Setup-x.y.z.exe and the site links to Blink-Setup.exe.
+          assets=$(gh release view "$tag" --json assets --jq '.assets[].name')
+          echo "$assets" | grep -qx "Blink-Setup-${tag#v}.exe" || { echo "::error::$tag has no Blink-Setup-${tag#v}.exe."; exit 1; }
+          echo "$assets" | grep -qx "Blink-Setup.exe" || { echo "::error::$tag has no Blink-Setup.exe."; exit 1; }
+
+          latest=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
+          echo "Current latest: ${latest:-none}. Promoting: $tag"
+          if [ "$latest" = "$tag" ]; then
+            echo "$tag is already the latest release."
+            exit 0
+          fi
+          # Newer than $tag: the lines above it in the sorted list.
+          newer=$(awk -v t="$tag" '$1 == t { exit } { print $1 }' releases.txt)
+          older_than_latest=false
+          if [ -n "$latest" ] && echo "$newer" | grep -qx "$latest"; then
+            older_than_latest=true
+          fi
+          if $older_than_latest && [ "$ROLLBACK" != "true" ]; then
+            echo "::error::$tag is older than the current latest ($latest). Check 'rollback' to roll back."
+            exit 1
+          fi
+
+          gh release edit "$tag" --prerelease=false --latest
+          echo "$tag is now the latest release." | tee -a "$GITHUB_STEP_SUMMARY"
+
+          if $older_than_latest; then
+            for t in $newer; do
+              gh release edit "$t" --prerelease
+              echo "Rolled back: $t is a pre-release again." | tee -a "$GITHUB_STEP_SUMMARY"
+            done
+          fi

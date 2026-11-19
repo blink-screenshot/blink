@@ -1,0 +1,12 @@
+# The workflows pin every action to a full commit SHA (with the version as a comment), so a
+# moved or hijacked tag cannot change what runs with this repository's permissions. Dependabot
+# keeps those pins up to date: it opens one pull request a month with all action updates.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

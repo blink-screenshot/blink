@@ -1,0 +1,20 @@
+name: Feature request
+description: An idea for Blink
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: Describe the problem or the situation, not only the solution. Why does it matter to you?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could Blink help?
+  - type: textarea
+    id: others
+    attributes:
+      label: How do other tools do this?
+      description: Optional. Screenshots of another tool are welcome.

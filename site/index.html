@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blink | Free screenshot tool for Windows</title>
+<meta name="description" content="Blink is a free, open-source screenshot tool for Windows. Capture a region, window or whole scrolling page, annotate, blur what must stay private, and put it on a background or device mockup.">
+<meta name="theme-color" content="#101114">
+<meta property="og:title" content="Blink | Screenshots that look finished">
+<meta property="og:description" content="Free, open-source screenshot tool for Windows: capture, annotate, redact and present.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://blink-screenshot.github.io/blink/">
+<meta property="og:image" content="https://blink-screenshot.github.io/blink/img/editor-frame.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="favicon.ico">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Blink",
+  "operatingSystem": "Windows 10, Windows 11",
+  "applicationCategory": "MultimediaApplication",
+  "description": "Free, open-source screenshot tool for Windows with an annotation editor, real redaction, scrolling capture, backgrounds and device mockups.",
+  "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+  "downloadUrl": "https://github.com/blink-screenshot/blink/releases/latest",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" }
+}
+</script>
+<style>
+  :root {
+    --ink: #101114;
+    --canvas: #0a0b0d;
+    --panel: #17181c;
+    --group: #1f2126;
+    --border: #2e3138;
+    --text: #eaecf0;
+    --muted: #a3a7b1;
+    --accent: #ff2e93;
+    --accent-soft: #ffb3d9;
+    --accent-dim: #e04c95;
+    --signal: #22d3ee;
+    --radius: 14px;
+    --maxw: 1120px;
+    --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Inter", Roboto, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 76px; }
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  img { max-width: 100%; height: auto; display: block; }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:hover { color: var(--accent-soft); }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+  .skip { position: absolute; left: -999px; top: 8px; background: var(--accent); color: var(--ink); padding: 8px 14px; border-radius: 8px; z-index: 100; font-weight: 600; }
+  .skip:focus { left: 8px; }
+  .wrap { width: min(var(--maxw), 100% - 32px); margin-inline: auto; }
+  h1, h2, h3 { line-height: 1.12; letter-spacing: -0.02em; margin: 0; }
+  h1 { font-size: clamp(2.3rem, 5.6vw, 4rem); font-weight: 750; }
+  h2 { font-size: clamp(1.7rem, 3.6vw, 2.5rem); font-weight: 720; }
+  h3 { font-size: 1.15rem; font-weight: 650; letter-spacing: -0.01em; }
+  p { margin: 0; }
+  .lead { font-size: clamp(1.05rem, 1.7vw, 1.28rem); color: var(--muted); max-width: 60ch; }
+  .eyebrow { font-family: var(--mono); font-size: .78rem; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+  .hl { color: var(--accent); }
+
+  /* header */
+  header.site {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(16, 17, 20, .82);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--border);
+  }
+  header.site .wrap { display: flex; align-items: center; gap: 24px; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-weight: 750; font-size: 1.15rem; letter-spacing: -0.01em; }
+  .brand img { width: 30px; height: 30px; }
+  nav.main { margin-left: auto; display: flex; align-items: center; gap: 22px; }
+  nav.main a:not(.btn) { color: var(--muted); text-decoration: none; font-size: .95rem; }
+  nav.main a:not(.btn):hover { color: var(--text); }
+  @media (max-width: 720px) { nav.main a:not(.btn) { display: none; } }
+
+  /* buttons */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: 48px; padding: 0 22px;
+    border-radius: 11px; border: 1px solid var(--border);
+    background: var(--group); color: var(--text);
+    font: inherit; font-weight: 650; text-decoration: none; cursor: pointer;
+    transition: transform .15s ease, background .15s ease, border-color .15s ease;
+  }
+  .btn:hover { background: #2a2d34; color: var(--text); border-color: #444955; }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: var(--accent); color: var(--ink); border-color: var(--accent); }
+  .btn.primary:hover { background: var(--accent-soft); border-color: var(--accent-soft); color: var(--ink); }
+  .btn.small { min-height: 38px; padding: 0 16px; font-size: .92rem; }
+
+  /* hero */
+  .hero { position: relative; overflow: hidden; padding: clamp(48px, 8vw, 96px) 0 0; }
+  .hero::before {
+    content: ""; position: absolute; inset: -20% -10% auto -10%; height: 90%;
+    background: radial-gradient(60% 60% at 70% 0%, rgba(255, 46, 147, .16), transparent 70%);
+    pointer-events: none;
+  }
+  .hero .wrap { position: relative; }
+  .hero-copy { max-width: 780px; }
+  .hero-copy h1 { margin: 14px 0 22px; }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+  .fine { margin-top: 14px; font-size: .9rem; color: var(--muted); }
+  .hero-shot { margin-top: clamp(36px, 6vw, 64px); }
+  .window {
+    border-radius: var(--radius); overflow: hidden;
+    border: 1px solid var(--border);
+    box-shadow: 0 40px 120px -30px rgba(255, 46, 147, .22), 0 20px 60px rgba(0, 0, 0, .6);
+    background: var(--canvas);
+  }
+
+  /* trust strip */
+  .strip { border-block: 1px solid var(--border); margin-top: clamp(48px, 7vw, 88px); background: var(--canvas); }
+  .strip ul { list-style: none; margin: 0; padding: 22px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px 28px; }
+  .strip li { display: flex; gap: 10px; align-items: baseline; color: var(--muted); font-size: .96rem; }
+  .strip li b { color: var(--text); font-weight: 650; }
+  .strip li::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; transform: translateY(-1px); }
+
+  section.block { padding: clamp(64px, 9vw, 120px) 0; }
+  section.alt { background: var(--canvas); border-block: 1px solid var(--border); }
+  .head { max-width: 720px; margin-bottom: clamp(32px, 5vw, 56px); }
+  .head h2 { margin: 12px 0 16px; }
+
+  /* feature rows */
+  .row { display: grid; grid-template-columns: 1fr; gap: clamp(24px, 4vw, 56px); align-items: center; }
+  @media (min-width: 900px) {
+    .row { grid-template-columns: 1fr 1.15fr; }
+    .row.flip { grid-template-columns: 1.15fr 1fr; }
+    .row.flip .copy { order: 2; }
+  }
+  .row + .row { margin-top: clamp(56px, 8vw, 104px); }
+  .copy h3 { font-size: clamp(1.4rem, 2.6vw, 1.9rem); margin: 10px 0 14px; letter-spacing: -0.02em; }
+  .copy p { color: var(--muted); }
+  .copy p + p { margin-top: 12px; }
+  .ticks { list-style: none; padding: 0; margin: 20px 0 0; display: grid; gap: 10px; }
+  .ticks li { position: relative; padding-left: 26px; color: var(--text); font-size: .98rem; }
+  .ticks li::before {
+    content: ""; position: absolute; left: 2px; top: .5em; width: 11px; height: 6px;
+    border-left: 2.5px solid var(--accent); border-bottom: 2.5px solid var(--accent);
+    transform: rotate(-45deg) translateY(-3px);
+  }
+  figure { margin: 0; }
+  figure .window { box-shadow: 0 24px 70px -20px rgba(0, 0, 0, .7); }
+  figcaption { margin-top: 10px; font-size: .85rem; color: var(--muted); }
+
+  .pair { display: grid; gap: 16px; grid-template-columns: 1fr; }
+  @media (min-width: 560px) { .pair { grid-template-columns: 1fr 1fr; } }
+  .pair img { border-radius: 12px; border: 1px solid var(--border); }
+
+  /* capture chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+  .chip { padding: 7px 13px; border-radius: 999px; background: var(--group); border: 1px solid var(--border); font-size: .9rem; color: var(--text); }
+  .chip.scroll { border-color: var(--signal); color: #a5f3fc; }
+
+  /* cards */
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; }
+  .card h3 { margin-bottom: 8px; }
+  .card p { color: var(--muted); font-size: .97rem; }
+
+  kbd {
+    font-family: var(--mono); font-size: .82rem;
+    background: var(--group); border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 6px; padding: 2px 7px; color: var(--text); white-space: nowrap;
+  }
+  table.keys { width: 100%; border-collapse: collapse; margin-top: 22px; font-size: .96rem; }
+  table.keys th, table.keys td { text-align: left; padding: 11px 6px; border-bottom: 1px solid var(--border); }
+  table.keys th { color: var(--muted); font-weight: 500; font-size: .85rem; }
+
+  /* privacy */
+  .privacy { display: grid; gap: 28px; grid-template-columns: 1fr; align-items: center; }
+  @media (min-width: 900px) { .privacy { grid-template-columns: 1.1fr 1fr; } }
+  .big-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+  .big-list li { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+  .big-list b { display: block; font-size: 1.02rem; margin-bottom: 2px; }
+  .big-list span { color: var(--muted); font-size: .95rem; }
+
+  /* faq */
+  details { border-bottom: 1px solid var(--border); }
+  details:first-of-type { border-top: 1px solid var(--border); }
+  summary { cursor: pointer; padding: 20px 4px; font-weight: 620; font-size: 1.06rem; list-style: none; display: flex; justify-content: space-between; gap: 16px; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; color: var(--accent); font-size: 1.4rem; line-height: 1; flex: none; }
+  details[open] summary::after { content: "\2212"; }
+  details p { padding: 0 4px 22px; color: var(--muted); max-width: 70ch; }
+
+  .final { text-align: center; }
+  .final .lead { margin-inline: auto; }
+  .final .cta-row { justify-content: center; }
+
+  footer.site { border-top: 1px solid var(--border); padding: 36px 0 56px; color: var(--muted); font-size: .92rem; }
+  footer.site .wrap { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: center; }
+  footer.site nav { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px 20px; }
+  footer.site a { color: var(--muted); }
+  footer.site a:hover { color: var(--text); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .btn { transition: none; }
+  }
+
+  /* downloads */
+  .dl { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .dl .card { display: flex; flex-direction: column; gap: 10px; }
+  .dl .card.main { border-color: var(--accent-dim); box-shadow: 0 30px 90px -40px rgba(255, 46, 147, .35); }
+  .dl .card .os { display: flex; align-items: center; gap: 10px; }
+  .dl .card .os svg { width: 26px; height: 26px; flex: none; }
+  .dl .card .btn { width: 100%; }
+  .dl .card .links { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: .92rem; }
+  .dl .card .spacer { flex: 1; }
+  .badge { display: inline-block; font-family: var(--mono); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .badge.ok { border-color: var(--accent-dim); color: var(--accent-soft); }
+  .btn[aria-disabled="true"] { opacity: .55; pointer-events: none; }
+
+  /* comparison */
+  .table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+  table.compare { width: 100%; min-width: 760px; border-collapse: collapse; font-size: .93rem; }
+  table.compare th, table.compare td { padding: 11px 12px; text-align: center; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  table.compare tr:last-child td, table.compare tr:last-child th { border-bottom: 0; }
+  table.compare thead th { font-size: .86rem; color: var(--muted); font-weight: 600; background: var(--group); position: sticky; top: 0; }
+  table.compare tbody th { text-align: left; font-weight: 500; color: var(--text); white-space: nowrap; }
+  table.compare .blink { background: rgba(255, 46, 147, .08); }
+  table.compare thead th.blink { color: var(--accent-soft); background: rgba(255, 46, 147, .16); }
+  .y, .n, .p { font-weight: 650; }
+  .y { color: #4ade80; }
+  .n { color: #6b7280; }
+  .p { color: #fbbf24; }
+  table.compare small { display: block; color: var(--muted); font-size: .78rem; font-weight: 400; }
+  .notes { margin-top: 18px; color: var(--muted); font-size: .9rem; display: grid; gap: 6px; }
+  .honest { margin-top: 28px; }
+
+  /* support */
+  .support { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 26px; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Blink home">
+      <img src="img/logo.svg" width="30" height="30" alt="">
+      Blink
+    </a>
+    <nav class="main" aria-label="Main">
+      <a href="#capture">Capture</a>
+      <a href="#edit">Edit</a>
+      <a href="#present">Present</a>
+      <a href="#compare">Compare</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/blink-screenshot/blink">GitHub</a>
+      <a class="btn primary small" href="#download">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <!-- HERO -->
+  <section class="hero" id="top">
+    <div class="wrap">
+      <div class="hero-copy">
+        <p class="eyebrow">Free and open-source screenshot tool for Windows</p>
+        <h1>Screenshots that look <span class="hl">finished</span> the moment you take them.</h1>
+        <p class="lead">Capture a region, a window or a whole scrolling page. Mark it up, black out what is private, and put it on a background or a device. One small app that starts with Windows and stays out of your way.</p>
+        <div class="cta-row">
+          <a class="btn primary" href="https://github.com/blink-screenshot/blink/releases/latest/download/Blink-Setup.exe">Download for Windows</a>
+          <a class="btn" href="https://github.com/blink-screenshot/blink">View the source on GitHub</a>
+        </div>
+        <p class="fine">Free, open source (GPL-3.0). No account, no ads, no telemetry. Windows 10 and 11, 64-bit.</p>
+      </div>
+      <figure class="hero-shot">
+        <div class="window">
+          <img src="img/editor-frame.png" width="1132" height="750" alt="The Blink editor with an annotated dashboard screenshot: numbered steps, an arrow, a box around a table row and a blurred API key, on a hot pink background. The background panel is open on the right." fetchpriority="high">
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <div class="strip">
+    <div class="wrap">
+      <ul>
+        <li><span><b>7 capture modes</b> including scrolling pages</span></li>
+        <li><span><b>Real redaction</b>, not a cosmetic blur</span></li>
+        <li><span><b>17 backgrounds</b> and <b>18 device frames</b></span></li>
+        <li><span><b>Free and open source.</b> No account.</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- CAPTURE -->
+  <section class="block" id="capture">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">Capture</p>
+        <h2>Press one key. Get exactly what you pointed at.</h2>
+        <p class="lead">Hover a window and it snaps to its real, visible edge. Drag for a region. Press Space to cycle through the other modes. Your screenshot is a 1:1 copy of your screen pixels, also on mixed-scaling multi-monitor setups.</p>
+      </div>
+
+      <div class="row">
+        <div class="copy">
+          <h3>Seven ways to capture, one overlay</h3>
+          <p>A single selection overlay spans all your monitors, with a magnifier for pixel-precise edges. The mode bar at the top shows the active mode and what the mouse and keys do; click a mode to switch.</p>
+          <div class="chips" aria-label="Capture modes">
+            <span class="chip">Region</span>
+            <span class="chip">Window (snaps to the app)</span>
+            <span class="chip">Inner pane (Ctrl + click)</span>
+            <span class="chip">Screen under the mouse</span>
+            <span class="chip">All screens</span>
+            <span class="chip">Active window</span>
+            <span class="chip scroll">Scrolling page</span>
+          </div>
+          <ul class="ticks">
+            <li>Window edges without the invisible resize border or shadow that Windows adds.</li>
+            <li>Works on GPU-rendered apps such as Chrome, Edge and Electron, where copying a window directly often returns black. Blink cuts the window out of a frozen copy of the screen instead.</li>
+            <li>Scrolling capture stitches the page together and recognises fixed headers and footers.</li>
+          </ul>
+        </div>
+        <div>
+          <figure>
+            <img src="img/capture-bar.png" width="700" height="108" loading="lazy" alt="The mode bar of the capture overlay: Region / window (active, in pink), This screen (F), All screens (A), Scrolling (S), and a second row with Drag = region, Click = window, Ctrl + Click = inner pane, Space = next mode, Esc = cancel.">
+            <figcaption>The mode bar of the capture overlay.</figcaption>
+          </figure>
+          <div class="card" style="margin-top:20px">
+            <h3>Print Screen, handled properly</h3>
+            <p>On Windows 11 the Print Screen key opens the Snipping Tool. Blink shows for every hotkey whether it is active or taken by another app, and gives you an <b>Override</b> button to take it over.</p>
+            <table class="keys">
+              <thead><tr><th>Action</th><th>Default hotkey</th></tr></thead>
+              <tbody>
+                <tr><td>Region or window</td><td><kbd>Print Screen</kbd></td></tr>
+                <tr><td>Screen under the mouse</td><td><kbd>Shift</kbd> + <kbd>Print Screen</kbd></td></tr>
+                <tr><td>Active window</td><td><kbd>Alt</kbd> + <kbd>Print Screen</kbd></td></tr>
+                <tr><td>Scrolling page</td><td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Print Screen</kbd></td></tr>
+                <tr><td>Capture menu</td><td><kbd>Ctrl</kbd> + <kbd>Print Screen</kbd></td></tr>
+              </tbody>
+            </table>
+            <p style="margin-top:14px">Every hotkey can be changed.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- EDIT -->
+  <section class="block alt" id="edit">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">Edit</p>
+        <h2>Make your point. Hide the rest.</h2>
+        <p class="lead">A fast editor that opens straight after the capture. Every tool has a single-key shortcut, and Blink remembers the colour, width and style you used last for each tool.</p>
+      </div>
+
+      <div class="row">
+        <div class="copy">
+          <h3>The annotations people actually use</h3>
+          <ul class="ticks">
+            <li><b>Arrows</b> with five head styles, on one or both ends</li>
+            <li><b>Rectangles and ellipses</b> with line, fill and transparency</li>
+            <li><b>Text</b> in bold, italic, underline or strikethrough, with an optional background</li>
+            <li><b>Numbered steps</b> for how-to guides and bug reports</li>
+            <li><b>Shapes, callouts and emoji stamps</b>: star, hexagon and flowchart shapes, a text box with a pointer, and 54 colour emoji that stay sharp at any size</li>
+            <li><b>Highlighter, freehand, line, crop</b>, colour picker with eyedropper, undo and redo</li>
+            <li>Hold <kbd>Ctrl</kbd> to select and move with any tool</li>
+          </ul>
+        </div>
+        <figure>
+          <div class="window">
+            <img src="img/editor-annotate.png" width="1132" height="750" loading="lazy" alt="The Blink editor with numbered steps, a red arrow, a red box around one table row and a blurred API key on a dashboard screenshot.">
+          </div>
+          <figcaption>Steps, an arrow, a box and a blur. Each took one click or drag.</figcaption>
+        </figure>
+      </div>
+
+      <div class="row flip">
+        <div class="copy">
+          <p class="eyebrow">Redaction</p>
+          <h3>Blur that is built to stay blurred</h3>
+          <p>A light Gaussian blur keeps the shape of letters, and that can be partly reversed. Blink first reduces the area to blocks, blurs it three times with a radius that scales with the area, and adds noise. Far too little information is left to reconstruct text.</p>
+          <p>For passwords and API keys, use the <b>black box</b>. It removes the content completely, and the editor tells you so.</p>
+          <ul class="ticks">
+            <li>Blur, pixelate or black box, with adjustable strength</li>
+            <li>What you see is what you export: the editor and the export use the same renderer</li>
+          </ul>
+        </div>
+        <figure>
+          <div class="pair">
+            <img src="img/shot-background.png" width="900" height="449" loading="lazy" alt="The annotated dashboard on a hot pink gradient background with rounded corners and a shadow. The API key is blurred beyond recognition.">
+            <img src="img/shot-mockup-warm.png" width="900" height="591" loading="lazy" alt="The same screenshot shown on a monitor mockup against a warm orange to purple gradient.">
+          </div>
+          <figcaption>The API key in the top right card is blurred in both exports.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRESENT -->
+  <section class="block" id="present">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">Present</p>
+        <h2>From raw screenshot to something you are happy to post.</h2>
+        <p class="lead">Turn on a background, a device mockup, or both. Copy and Save include the frame, at the original resolution.</p>
+      </div>
+      <div class="row">
+        <figure>
+          <div class="window">
+            <img src="img/editor-mockup.png" width="1132" height="750" loading="lazy" alt="The Blink editor showing the annotated screenshot inside a monitor mockup on a blue gradient, with the Background and Device mockup panels open.">
+          </div>
+        </figure>
+        <div class="copy">
+          <h3>Backgrounds and devices in two clicks</h3>
+          <ul class="ticks">
+            <li><b>17 backgrounds</b>: gradients, mesh, waves, solid and transparent, plus your own two-colour gradient</li>
+            <li>Padding, corner radius, shadow, film grain and canvas ratios (1:1, 4:3, 3:2, 16:9, 9:16, 4:5), or an exact size for social media and slides</li>
+            <li><b>16 devices</b> (iPhone, Pixel, Galaxy, iPad, Surface, MacBook, Windows laptops, iMac and monitors), plus a browser window and an app window</li>
+            <li>Blink picks the device that fits your screenshot. <i>Fill</i> crops a little to fill the screen, <i>Fit</i> shows everything.</li>
+            <li>Devices are drawn as vectors, so they stay sharp at any resolution</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DETAILS -->
+  <section class="block alt" id="details">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">Built to be forgotten</p>
+        <h2>Light when idle. Quick when you need it.</h2>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3>Tiny always-on part</h3>
+          <p>The tray app, hotkeys, capture and overlay are plain Win32 with no UI framework. The editor starts as its own process only when you need it, so an editor crash never takes the tray with it.</p>
+        </div>
+        <div class="card">
+          <h3>You decide what happens next</h3>
+          <p>After each capture: open the editor, copy, save, or have Blink ask you with a small menu at the mouse. The notification has <i>Edit</i>, <i>Save</i> and <i>Save as</i> buttons. PNG, JPEG, WebP and BMP.</p>
+        </div>
+        <div class="card">
+          <h3>Installs without admin rights</h3>
+          <p>Per-user install, nothing machine-wide. There is also a portable exe that runs without installing. Start with Windows is optional.</p>
+        </div>
+        <div class="card">
+          <h3>Your language, your theme</h3>
+          <p>Blink speaks English and Dutch and comes in a dark and a light theme, or follows the Windows setting.</p>
+        </div>
+        <div class="card">
+          <h3>Updates that verify themselves</h3>
+          <p>Blink checks once a day for a new version. If you install it, the download is verified with its SHA-256 checksum before it runs. You can switch the check off, or skip a version.</p>
+        </div>
+        <div class="card">
+          <h3>Your screenshots stay on your PC</h3>
+          <p>No account, no cloud, no analytics. The only network request is the daily update check on GitHub, and you can turn it off.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMPARE -->
+  <section class="block" id="compare">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">Compare</p>
+        <h2>How Blink compares</h2>
+        <p class="lead">Every tool here is good at something. This is where Blink is strong, and where it is not.</p>
+      </div>
+      <div class="table-scroll" role="region" aria-label="Feature comparison" tabindex="0">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col" style="text-align:left">Feature</th>
+              <th scope="col" class="blink">Blink</th>
+              <th scope="col">Snipping Tool</th>
+              <th scope="col">Greenshot</th>
+              <th scope="col">ShareX</th>
+              <th scope="col">Flameshot</th>
+              <th scope="col">Snagit</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Price</th><td class="blink"><span class="y">Free</span></td><td>Free, built in</td><td>Free</td><td>Free</td><td>Free</td><td>$39 per year</td></tr>
+            <tr><th scope="row">Open source</th><td class="blink"><span class="y">GPL-3.0</span></td><td><span class="n">No</span></td><td><span class="y">GPL-3.0</span></td><td><span class="y">GPL-3.0</span></td><td><span class="y">GPL-3.0</span></td><td><span class="n">No</span></td></tr>
+            <tr><th scope="row">Platforms</th><td class="blink">Windows</td><td>Windows</td><td>Windows</td><td>Windows</td><td>Windows, macOS, Linux</td><td>Windows, macOS</td></tr>
+            <tr><th scope="row">Window capture that snaps to the app</th><td class="blink"><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="p">Partly</span></td><td><span class="y">Yes</span></td></tr>
+            <tr><th scope="row">Scrolling capture</th><td class="blink"><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="p">Limited</span><small>Internet Explorer only</small></td><td><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td></tr>
+            <tr><th scope="row">Arrows, shapes, text, highlighter</th><td class="blink"><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td></tr>
+            <tr><th scope="row">Numbered steps</th><td class="blink"><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td></tr>
+            <tr><th scope="row">Speech bubbles / callouts</th><td class="blink"><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td></tr>
+            <tr><th scope="row">Emoji stamps</th><td class="blink"><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Stamps</span></td></tr>
+            <tr><th scope="row">Blur and pixelate</th><td class="blink"><span class="y">Yes</span></td><td><span class="n">No</span><small>text redaction via OCR</small></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td></tr>
+            <tr><th scope="row">Background, padding, rounded corners, shadow</th><td class="blink"><span class="y">Yes</span><small>17 presets</small></td><td><span class="n">No</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span><small>since 2026</small></td><td><span class="n">No</span></td><td><span class="n">No</span></td></tr>
+            <tr><th scope="row">Device mockups</th><td class="blink"><span class="y">Yes</span><small>18 frames</small></td><td><span class="n">No</span></td><td><span class="n">No</span></td><td><span class="n">No</span></td><td><span class="n">No</span></td><td><span class="n">No</span></td></tr>
+            <tr><th scope="row">Text recognition (OCR)</th><td class="blink"><span class="n">No</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td></tr>
+            <tr><th scope="row">Screen recording / GIF</th><td class="blink"><span class="n">No</span></td><td><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td></tr>
+            <tr><th scope="row">Upload to the cloud</th><td class="blink"><span class="n">No</span><small>by design</small></td><td><span class="n">No</span></td><td><span class="p">Plugins</span></td><td><span class="y">Many services</span></td><td><span class="n">No</span></td><td><span class="y">Yes</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="notes">
+        <p>Checked in November 2026 against each tool's own website, changelog and documentation. Tools change quickly: if something here is out of date, <a href="https://github.com/blink-screenshot/blink/issues/new">open an issue</a> and we fix it.</p>
+      </div>
+      <div class="grid honest">
+        <div class="card">
+          <h3>Pick Blink if</h3>
+          <p>you want screenshots that are ready to share: annotated, safely redacted, and on a background or device, without a second app. And you want a tool that does that and nothing else.</p>
+        </div>
+        <div class="card">
+          <h3>Pick ShareX if</h3>
+          <p>you need everything: screen recording, OCR, uploads to dozens of services, automation workflows. It is more powerful than Blink, and busier.</p>
+        </div>
+        <div class="card">
+          <h3>Pick Flameshot or Snagit if</h3>
+          <p>you also work on macOS or Linux (Flameshot is free on all three), or you need a commercial tool with video and support (Snagit).</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DOWNLOAD -->
+  <section class="block alt" id="download">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">Download</p>
+        <h2>Get Blink</h2>
+        <p class="lead">Free, forever. The newest version is always on <a href="https://github.com/blink-screenshot/blink/releases/latest">GitHub Releases</a>, with its changelog and SHA-256 checksums.</p>
+      </div>
+      <div class="dl">
+        <div class="card main">
+          <div class="os">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 5.5 10.5 4.5v7H3zM11.5 4.4 21 3v8.5h-9.5zM3 12.5h7.5v7L3 18.5zM11.5 12.5H21V21l-9.5-1.4z"/></svg>
+            <h3>Windows</h3>
+            <span class="badge ok">Available</span>
+          </div>
+          <p>Windows 10 and 11, 64-bit. Installs per user, no admin rights needed.</p>
+          <span class="spacer"></span>
+          <a class="btn primary" href="https://github.com/blink-screenshot/blink/releases/latest/download/Blink-Setup.exe">Download installer</a>
+          <div class="links">
+            <a href="https://github.com/blink-screenshot/blink/releases/latest/download/Blink-portable.exe">Portable .exe</a>
+            <a href="https://github.com/blink-screenshot/blink/releases">All versions</a>
+          </div>
+        </div>
+        <div class="card">
+          <div class="os">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.4 12.6c0-2.5 2-3.6 2.1-3.7-1.2-1.7-3-1.9-3.6-2-1.5-.2-3 .9-3.8.9s-2-.9-3.3-.9c-1.7 0-3.3 1-4.2 2.5-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6s1.8-.8 3.3-.8 2 .8 3.3.8c1.4 0 2.3-1.3 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9-.1 0-2.8-1.1-2.8-4.2zM13.9 5.2c.7-.9 1.2-2 1.1-3.2-1 0-2.3.7-3 1.6-.7.8-1.2 2-1.1 3.1 1.2.1 2.3-.6 3-1.5z"/></svg>
+            <h3>macOS</h3>
+            <span class="badge">Not yet</span>
+          </div>
+          <p>The capture part of Blink is written directly against Windows. A macOS version needs its own capture, hotkey and tray code, and is on the roadmap.</p>
+          <span class="spacer"></span>
+          <a class="btn" href="https://github.com/blink-screenshot/blink/blob/main/docs/PLATFORMS.md">Read the plan</a>
+          <div class="links"><a href="https://github.com/blink-screenshot/blink">Watch the repository to hear when it lands</a></div>
+        </div>
+        <div class="card">
+          <div class="os">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2c-2.2 0-3.6 1.9-3.6 4.6 0 1.4.3 2.3-.6 3.6-1 1.5-2.8 3.6-2.8 6.2 0 .7.1 1.3.4 1.8-.6.3-1.4.7-1.4 1.4 0 1 1.6 1.2 3 1.7 1 .3 1.8.7 2.6.7.9 0 1.5-.5 1.9-.9h1c.4.4 1 .9 1.9.9.8 0 1.6-.4 2.6-.7 1.4-.5 3-.7 3-1.7 0-.7-.8-1.1-1.4-1.4.3-.5.4-1.1.4-1.8 0-2.6-1.8-4.7-2.8-6.2-.9-1.3-.6-2.2-.6-3.6C15.6 3.9 14.2 2 12 2zm-1.5 4c.4 0 .7.5.7 1.1 0 .6-.3 1.1-.7 1.1s-.7-.5-.7-1.1c0-.6.3-1.1.7-1.1zm3 0c.4 0 .7.5.7 1.1 0 .6-.3 1.1-.7 1.1s-.7-.5-.7-1.1c0-.6.3-1.1.7-1.1zM12 9.3c.9 0 2 .6 2 .9s-1.1 1-2 1-2-.7-2-1 1.1-.9 2-.9z"/></svg>
+            <h3>Linux</h3>
+            <span class="badge">Not yet</span>
+          </div>
+          <p>The editor already runs on Linux; capturing, hotkeys and the tray do not. X11 is the first target. Wayland limits what any screenshot tool can do, so it comes after.</p>
+          <span class="spacer"></span>
+          <a class="btn" href="https://github.com/blink-screenshot/blink/blob/main/docs/PLATFORMS.md">Read the plan</a>
+          <div class="links"><a href="https://github.com/blink-screenshot/blink/blob/main/CONTRIBUTING.md">Help build it</a></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="block" id="faq">
+    <div class="wrap" style="max-width: 820px">
+      <div class="head">
+        <p class="eyebrow">FAQ</p>
+        <h2>Questions people ask first</h2>
+      </div>
+
+      <details>
+        <summary>Is Blink really free?</summary>
+        <p>Yes. Blink is open source under the GNU General Public License v3.0. There is no paid version, no trial and no feature held back. If it saves you time, you can support it with a small donation, but you do not have to.</p>
+      </details>
+      <details>
+        <summary>Windows says the publisher is unknown. Is that safe?</summary>
+        <p>The installer is not code-signed yet, so Windows SmartScreen warns about it the first time. Choose <i>More info</i>, then <i>Run anyway</i>. Every release is built in public by GitHub Actions from the source code in the repository, and GitHub lists the SHA-256 checksum of each file, so you can check exactly what you downloaded.</p>
+      </details>
+      <details>
+        <summary>Does Blink upload my screenshots anywhere?</summary>
+        <p>No. Screenshots are kept in memory, in your clipboard, or in the folder you choose. The only network request Blink makes is a daily check for a new version on GitHub, which you can turn off.</p>
+      </details>
+      <details>
+        <summary>Print Screen still opens the Snipping Tool.</summary>
+        <p>That is a Windows 11 setting. Turn off <i>Settings, Accessibility, Keyboard, Use the Print Screen key to open screen capture</i>. Blink also shows the status of each hotkey and can override a combination another app has taken.</p>
+      </details>
+      <details>
+        <summary>What are the limits of scrolling capture?</summary>
+        <p>It scrolls with simulated mouse wheel steps and stitches the frames together. It works in browsers, editors, chat apps and File Explorer. It can fail on content that changes while it scrolls, such as video, animations, or lazy-loaded content that shifts. In that case Blink stops and gives you what it captured so far.</p>
+      </details>
+      <details>
+        <summary>Is there a macOS or Linux version?</summary>
+        <p>Not yet. Blink runs on Windows 10 and 11 (64-bit). The editor is portable, but capturing, hotkeys and the tray icon are written for Windows. <a href="https://github.com/blink-screenshot/blink/blob/main/docs/PLATFORMS.md">The plan for macOS and Linux</a> explains what a port needs.</p>
+      </details>
+      <details>
+        <summary>What happens to my settings if I uninstall?</summary>
+        <p>The uninstaller removes the app but leaves your settings and your screenshots in place.</p>
+      </details>
+      <details>
+        <summary>I found a bug or I miss a feature.</summary>
+        <p><a href="https://github.com/blink-screenshot/blink/issues/new/choose">Open an issue on GitHub</a>. Pull requests are welcome too; <a href="https://github.com/blink-screenshot/blink/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a> explains how to build Blink.</p>
+      </details>
+    </div>
+  </section>
+
+  <!-- SUPPORT -->
+  <section class="block alt final" id="support">
+    <div class="wrap">
+      <p class="eyebrow">Support Blink</p>
+      <h2 style="margin-top:12px">Free to use. Kept alive by people who use it.</h2>
+      <p class="lead" style="margin:16px auto 0">Blink is made in spare time. A star on GitHub helps others find it; a coffee pays for the time it takes to keep it working.</p>
+      <div class="support">
+        <a class="btn primary" href="https://github.com/blink-screenshot/blink/releases/latest/download/Blink-Setup.exe">Download for Windows</a>
+        <a class="btn" href="https://github.com/blink-screenshot/blink">Star on GitHub</a>
+        <a class="btn" data-donate href="https://ko-fi.com/blinkscreenshot">Buy me a coffee</a>
+        <a class="btn" data-donate href="https://github.com/sponsors/YOUR-GITHUB-NAME">Sponsor on GitHub</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>Blink is free software under the <a href="https://github.com/blink-screenshot/blink/blob/main/LICENSE">GPL-3.0</a>. Made in the Netherlands.</span>
+    <nav aria-label="Footer">
+      <a href="https://github.com/blink-screenshot/blink">Source code</a>
+      <a href="https://github.com/blink-screenshot/blink/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/blink-screenshot/blink/issues">Issues</a>
+      <a href="https://github.com/blink-screenshot/blink/blob/main/PRIVACY.md">Privacy</a>
+      <a href="https://ko-fi.com/blinkscreenshot">Support Blink</a>
+    </nav>
+  </div>
+</footer>
+<script>
+  // Donation links that still hold a placeholder are hidden, so the page never shows a dead link.
+  document.querySelectorAll("[data-donate]").forEach(function (a) {
+    if (a.href.indexOf("YOUR-") !== -1) a.remove();
+  });
+</script>
+</body>
+</html>

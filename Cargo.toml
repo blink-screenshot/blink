@@ -1,0 +1,71 @@
+[package]
+name = "blink"
+version = "1.0.0"
+edition = "2021"
+description = "Lightweight screenshot tool for Windows with an annotation editor, real redaction, backgrounds and device mockups"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/blink-screenshot/blink"
+homepage = "https://blink-screenshot.github.io/blink/"
+readme = "README.md"
+keywords = ["screenshot", "screen-capture", "annotation", "windows"]
+categories = ["multimedia::images"]
+publish = false
+build = "build.rs"
+
+[[bin]]
+name = "Blink"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "=0.31.1", default-features = false, features = ["glow", "default_fonts", "x11"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp", "ico"] }
+tiny-skia = "0.11"
+ab_glyph = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+arboard = { version = "3.4", default-features = false, features = ["image-data"] }
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+dirs = "5"
+raw-window-handle = "0.6"
+sha2 = "0.10"
+resvg = { version = "0.45", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Accessibility",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_System_Registry",
+    "Win32_System_SystemServices",
+    "Win32_Security",
+    "Win32_Networking_WinHttp",
+] }
+# WinRT toast notifications (buttons need a toast; the tray balloon has none).
+windows = { version = "0.58", default-features = false, features = [
+    "Data_Xml_Dom",
+    "Foundation",
+    "UI_Notifications",
+    "Win32_System_WinRT",
+] }
+
+[build-dependencies]
+embed-resource = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+panic = "abort"
+
+# Image processing (blur, stitching) must be fast even in debug builds.
+[profile.dev.package."*"]
+opt-level = 2

@@ -1,0 +1,219 @@
+name: Build
+
+# Every push builds and tests Blink (installer as artifact). A push to main also releases every
+# version from CHANGELOG.md that has no tag yet: the current version is tagged on main as it
+# is, older ones on the commit that set them in Cargo.toml. Each is built and published as a
+# PRE-release with the installer. The in-app updater and releases/latest ignore pre-releases,
+# so nobody gets it until it is promoted with the Promote workflow (promote.yml).
+# Releasing is therefore: bump the version, add its CHANGELOG.md section, merge to main,
+# install and test the pre-release, then run Actions > Promote.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Install NSIS
+        shell: pwsh
+        run: ./tools/install-nsis.ps1
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force dist | Out-Null
+          makensis /DVERSION=$version /DEXE=..\target\release\Blink.exe installer\blink.nsi
+          Copy-Item target\release\Blink.exe dist\Blink-portable.exe
+
+      # The download size is a selling point: keep an eye on it in every build.
+      - name: Report sizes
+        shell: pwsh
+        run: |
+          Get-ChildItem dist\*.exe | ForEach-Object {
+            $mb = [math]::Round($_.Length / 1MB, 2)
+            "$($_.Name): $mb MB" | Tee-Object -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Blink-windows
+          path: dist/*.exe
+
+  # The editor, the renderer and the stitching are portable: test them on Linux too, so
+  # contributors without Windows get the same checks. Also keeps THIRD-PARTY-NOTICES.md current.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Third-party notices up to date
+        run: python3 tools/third_party_notices.py --check
+
+  # Which versions in CHANGELOG.md have no release tag yet, and which commit each one is.
+  plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.find.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - id: find
+        shell: bash
+        run: |
+          items=()
+          current=$(grep -oP '^version = "\K[^"]+' Cargo.toml)
+          # Oldest first.
+          for version in $(grep -oP '^## \[\K[0-9]+\.[0-9]+\.[0-9]+(?=\])' CHANGELOG.md | tac); do
+            if git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then
+              echo "v$version: already released"
+              continue
+            fi
+            # The commit that set this version in Cargo.toml.
+            if [ "$version" = "$current" ]; then
+              # The version main is at now: release main as it is.
+              sha=$GITHUB_SHA
+            else
+              # An older version: the commit that set it in Cargo.toml.
+              # (No "| head": with pipefail the closed pipe would fail the step.)
+              shas=$(git log --reverse --format=%H -G "^version = \"${version//./\\.}\"$" -- Cargo.toml)
+              sha=${shas%%$'\n'*}
+            fi
+            if [ -z "$sha" ]; then
+              echo "::warning::CHANGELOG.md has $version, but Cargo.toml never had that version"
+              continue
+            fi
+            echo "v$version: release from $sha"
+            items+=("{\"version\":\"$version\",\"sha\":\"$sha\"}")
+          done
+          matrix=$(IFS=,; echo "[${items[*]}]")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "$matrix"
+
+  release:
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ matrix.sha }}
+
+      # The release notes come from the newest CHANGELOG.md (older commits may not have it).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: head
+
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build
+        run: cargo build --release
+
+      # The script comes from the newest commit: old commits may not have it.
+      - name: Install NSIS
+        shell: pwsh
+        run: ./head/tools/install-nsis.ps1
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          makensis /DVERSION=${{ matrix.version }} /DEXE=..\target\release\Blink.exe installer\blink.nsi
+          Copy-Item target\release\Blink.exe dist\Blink-portable.exe
+          # A fixed name too, so releases/latest/download/Blink-Setup.exe always works
+          # (README and site link to it).
+          Copy-Item dist\Blink-Setup-${{ matrix.version }}.exe dist\Blink-Setup.exe
+
+      - name: Release notes
+        shell: bash
+        run: |
+          awk -v v="${{ matrix.version }}" '
+            /^## \[/ { on = index($0, "## [" v "]") == 1; next }
+            /^\[[0-9.]+\]: / { next }
+            on { print }
+          ' head/CHANGELOG.md > dist/notes.md
+          cat dist/notes.md
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: v${{ matrix.version }}
+          target_commitish: ${{ matrix.sha }}
+          name: Blink ${{ matrix.version }}
+          body_path: dist/notes.md
+          files: dist/*.exe
+          # Users only get it after Actions > Promote (promote.yml).
+          prerelease: true
+          make_latest: false
+
+  # Keeps the notes of every release equal to its CHANGELOG.md section. Run it by hand after
+  # editing CHANGELOG.md (Actions > Build > Run workflow, on main). It does not change which
+  # release is "latest" (what the in-app updater reads): only promote.yml does that.
+  release-notes:
+    needs: [plan, release]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.release.result != 'failure' }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Sync release notes
+        shell: bash
+        run: |
+          # Editing a release can make GitHub pick another "latest": put the current one back after.
+          latest=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
+          for version in $(grep -oP '^## \[\K[0-9]+\.[0-9]+\.[0-9]+(?=\])' CHANGELOG.md); do
+            tag="v$version"
+            if ! gh release view "$tag" > /dev/null 2>&1; then
+              echo "No release $tag (yet), skipped"
+              continue
+            fi
+            awk -v v="$version" '
+              /^## \[/ { on = index($0, "## [" v "]") == 1; next }
+              /^\[[0-9.]+\]: / { next }
+              on { print }
+            ' CHANGELOG.md > notes.md
+            gh release edit "$tag" --notes-file notes.md --title "Blink $version"
+            echo "Updated $tag"
+          done
+          if [ -n "$latest" ]; then
+            gh release edit "$latest" --latest
+            echo "Latest (unchanged): $latest"
+          fi

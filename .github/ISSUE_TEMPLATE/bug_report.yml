@@ -1,0 +1,32 @@
+name: Bug report
+description: Something in Blink does not work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Blink version
+      description: Settings > About
+      placeholder: "2.3.1"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2"
+    validations:
+      required: true
+  - type: textarea
+    id: monitors
+    attributes:
+      label: Monitors
+      description: For capture problems, the number of monitors and the scaling of each (Settings > System > Display).
+      placeholder: "2 monitors: 2560x1440 at 100%, laptop 1920x1200 at 150%"
