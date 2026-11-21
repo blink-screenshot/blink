@@ -800,6 +800,13 @@ impl SettingsApp {
                 info(ui, "rec-fps", t("30 is smooth. 15 makes smaller files and is enough for most screen work. A GIF always gets 12."));
             });
             ui.end_row();
+            ui.label(t("Video size"));
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut r.full_resolution, false, t("Half on sharp screens"));
+                ui.selectable_value(&mut r.full_resolution, true, t("Full resolution"));
+                info(ui, "rec-size", t("On a screen at 200% scaling or more (such as a 4K laptop), half size looks like the same screen at 100%: text stays readable, files are four times smaller, and recording and saving are much faster. Full resolution keeps every pixel, at the cost of size and speed. Other screens are always recorded at full resolution."));
+            });
+            ui.end_row();
             ui.label(t("Largest GIF width"));
             ui.horizontal(|ui| {
                 ui.add(egui::DragValue::new(&mut r.gif_max_width).range(320..=1920).speed(10.0).suffix(" px"));

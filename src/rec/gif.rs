@@ -11,7 +11,8 @@
 //! measured against what the GIF shows at that moment, so slow changes still get through
 //! once they add up.
 
-use super::export::FrameSink;
+use super::export::{output_size, FrameSink};
+use super::yuv::Nv12;
 use image::RgbaImage;
 use std::io::Write;
 
@@ -50,11 +51,26 @@ pub struct GifSink<W: Write> {
     shown: Option<RgbaImage>,
     pending: Option<Pending>,
     bytes: u64,
+    /// Video frames wider than this are scaled down.
+    max_width: Option<u32>,
+    /// Bytes written once the first frame was out (the header and the one whole frame).
+    first_bytes: Option<u64>,
 }
 
 impl<W: Write> GifSink<W> {
     pub fn new(out: W) -> Self {
-        Self { enc: None, out: Some(out), shown: None, pending: None, bytes: 0 }
+        Self { enc: None, out: Some(out), shown: None, pending: None, bytes: 0, max_width: None, first_bytes: None }
+    }
+
+    /// Scales video frames down to at most `w` pixels wide.
+    pub fn max_width(mut self, w: Option<u32>) -> Self {
+        self.max_width = w;
+        self
+    }
+
+    /// The bytes of the header and the first frame, once it is written.
+    pub fn first_frame_bytes(&self) -> Option<u64> {
+        self.first_bytes
     }
 
     fn encoder(&mut self, w: u32, h: u32) -> Result<&mut ::gif::Encoder<Counter<W>>, String> {
@@ -76,7 +92,10 @@ impl<W: Write> GifSink<W> {
             let delay = (t as i64 + 5) / 10 - (p.t as i64 + 5) / 10;
             p.frame.delay = delay.clamp(2, u16::MAX as i64) as u16;
             let (w, h) = self.shown.as_ref().map_or((1, 1), |s| s.dimensions());
-            self.encoder(w, h)?.write_frame(&p.frame).map_err(|e| e.to_string())?;
+            let enc = self.encoder(w, h)?;
+            enc.write_frame(&p.frame).map_err(|e| e.to_string())?;
+            let written = enc.get_ref().bytes;
+            self.first_bytes.get_or_insert(written);
         }
         Ok(())
     }
@@ -116,7 +135,20 @@ fn row(img: &RgbaImage, y: u32) -> &[u8] {
 }
 
 impl<W: Write> FrameSink for GifSink<W> {
-    fn push(&mut self, frame: &RgbaImage, t: u32) -> Result<(), String> {
+    fn push(&mut self, frame: &Nv12, t: u32) -> Result<(), String> {
+        let (ow, oh) = output_size(frame.w, frame.h, self.max_width);
+        let rgba = frame.to_rgba_scaled(ow, oh);
+        self.push_rgba(&rgba, t)
+    }
+
+    fn finish(&mut self, end: u32) -> Result<u64, String> {
+        self.finish_gif(end)
+    }
+}
+
+impl<W: Write> GifSink<W> {
+    /// Adds a frame shown from `t` ms.
+    pub fn push_rgba(&mut self, frame: &RgbaImage, t: u32) -> Result<(), String> {
         let (w, h) = frame.dimensions();
         let (rect, rgba) = match &mut self.shown {
             None => {
@@ -155,7 +187,8 @@ impl<W: Write> FrameSink for GifSink<W> {
         Ok(())
     }
 
-    fn finish(&mut self, end: u32) -> Result<u64, String> {
+    /// Ends the GIF at `end` ms; returns its size.
+    pub fn finish_gif(&mut self, end: u32) -> Result<u64, String> {
         self.flush_pending(end)?;
         if let Some(enc) = self.enc.take() {
             let mut counter = enc.into_inner().map_err(|e| e.to_string())?;
@@ -194,9 +227,9 @@ mod tests {
     fn encode(frames: &[(u32, RgbaImage)], end: u32) -> (Vec<u8>, u64) {
         let mut sink = GifSink::new(Vec::new());
         for (t, f) in frames {
-            sink.push(f, *t).unwrap();
+            sink.push_rgba(f, *t).unwrap();
         }
-        let bytes = sink.finish(end).unwrap();
+        let bytes = sink.finish_gif(end).unwrap();
         (sink.into_output().unwrap(), bytes)
     }
 
@@ -282,7 +315,7 @@ mod tests {
     #[test]
     fn a_frame_of_another_size_is_refused() {
         let mut sink = GifSink::new(Vec::new());
-        sink.push(&scene(0), 0).unwrap();
-        assert!(sink.push(&RgbaImage::new(10, 10), 100).is_err());
+        sink.push_rgba(&scene(0), 0).unwrap();
+        assert!(sink.push_rgba(&RgbaImage::new(10, 10), 100).is_err());
     }
 }

@@ -13,9 +13,9 @@ use crate::rec::compose::Overlays;
 use crate::rec::export::{self, human_duration, human_size, Clip, Job, Trim};
 use crate::rec::keys::KeyMode;
 use crate::rec::store::{Rec, Spec};
+use crate::rec::yuv::Nv12;
 use crate::theme::{self, pal};
 use eframe::egui::{self, vec2, RichText, Sense};
-use image::RgbaImage;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -73,15 +73,17 @@ pub fn run(dir: &Path) -> Result<(), String> {
                 playing: None,
                 trim: Trim::whole(duration),
                 overlays,
-                format: s.format,
+                // The clip window is mostly for making a GIF to share.
+                format: VideoFormat::Gif,
                 estimate: Estimate::new(rec.dir.clone(), cc.egui_ctx.clone()),
                 export: None,
                 saved: None,
+                folder: Config::load().recording.output_dir,
                 message: None,
                 drag: None,
             };
             app.request();
-            app.estimate.ask(&app.job_for(app.format), app.format);
+            app.estimate.ask(&app.job_for(app.format), app.format, app.gif_width());
             Ok(Box::new(app))
         }),
     )
@@ -118,8 +120,9 @@ impl Player {
                 }
             };
             let fonts = crate::capture_bar::fonts();
-            let mut cur: Option<(u32, RgbaImage)> = None;
-            let mut ahead: Option<(u32, RgbaImage)> = None;
+            let mut cur: Option<(u32, Nv12)> = None;
+            let mut ahead: Option<(u32, Nv12)> = None;
+            let mut work = Nv12::default();
             let mut ended = false;
             loop {
                 let (t, overlays) = {
@@ -153,12 +156,12 @@ impl Player {
                     }
                 }
                 let Some((_, frame)) = &cur else { continue };
-                let mut img = frame.clone();
-                clip.compose(&mut img, t, &overlays, fonts);
-                if img.width() > PREVIEW_MAX_W {
-                    let (pw, ph) = export::output_size(img.width(), img.height(), Some(PREVIEW_MAX_W));
-                    img = image::imageops::resize(&img, pw, ph, image::imageops::FilterType::Triangle);
-                }
+                work.clone_from(frame);
+                clip.compose(&mut work, t, &overlays, fonts);
+                // Straight to the size it is shown at: converting a whole 4K frame would cost
+                // more than it shows.
+                let (pw, ph) = export::output_size(work.w, work.h, Some(PREVIEW_MAX_W));
+                let img = work.to_rgba_scaled(pw, ph);
                 let size = [img.width() as usize, img.height() as usize];
                 let ci = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
                 if tx.send((t, ci)).is_err() {
@@ -200,7 +203,7 @@ impl Estimate {
         Estimate { dir, ctx, generation: Arc::new(AtomicU64::new(0)), result: Arc::new(Mutex::new(None)) }
     }
 
-    fn ask(&self, job: &Job, format: VideoFormat) {
+    fn ask(&self, job: &Job, format: VideoFormat, max_width: Option<u32>) {
         let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let result = self.result.clone();
         if format == VideoFormat::Mp4 {
@@ -219,7 +222,7 @@ impl Estimate {
                 let (w, h) = (clip.log.header.w, clip.log.header.h);
                 let mut src = platform::open_video(&rec.master(), Some((w, h)))?;
                 let cancel = || generation.load(Ordering::SeqCst) != gen;
-                export::estimate_gif(src.as_mut(), &clip, &job, crate::capture_bar::fonts(), &cancel)
+                export::estimate_gif(src.as_mut(), &clip, &job, max_width, crate::capture_bar::fonts(), &cancel)
             })();
             if generation.load(Ordering::SeqCst) == gen {
                 *result.lock().unwrap_or_else(|e| e.into_inner()) = Some((gen, r));
@@ -271,6 +274,8 @@ struct ClipApp {
     estimate: Estimate,
     export: Option<Exporting>,
     saved: Option<PathBuf>,
+    /// Where Save puts it (Settings > Recording).
+    folder: PathBuf,
     message: Option<(String, bool)>,
     drag: Option<Drag>,
 }
@@ -279,14 +284,13 @@ impl ClipApp {
     fn job_for(&self, format: VideoFormat) -> Job {
         let fps = self.clip.log.header.fps;
         match format {
-            VideoFormat::Mp4 => Job { trim: self.trim, overlays: self.overlays, fps, max_width: None },
-            VideoFormat::Gif => Job {
-                trim: self.trim,
-                overlays: self.overlays,
-                fps: GIF_FPS,
-                max_width: Some(self.spec.settings.gif_max_width.max(64)),
-            },
+            VideoFormat::Mp4 => Job { trim: self.trim, overlays: self.overlays, fps },
+            VideoFormat::Gif => Job { trim: self.trim, overlays: self.overlays, fps: GIF_FPS },
         }
+    }
+
+    fn gif_width(&self) -> Option<u32> {
+        Some(self.spec.settings.gif_max_width.max(64))
     }
 
     fn request(&mut self) {
@@ -298,7 +302,7 @@ impl ClipApp {
     }
 
     fn settings_changed(&mut self) {
-        self.estimate.ask(&self.job_for(self.format), self.format);
+        self.estimate.ask(&self.job_for(self.format), self.format, self.gif_width());
         self.request();
     }
 
@@ -311,25 +315,29 @@ impl ClipApp {
         }
     }
 
-    fn start_export(&mut self) {
+    /// Saves to the recordings folder (Settings > Recording), or with `ask` where you choose.
+    fn start_export(&mut self, ask: bool) {
         let fmt = self.format;
         let c = Config::load();
         let dir = c.recording.output_dir.clone();
         std::fs::create_dir_all(&dir).ok();
         let suggested = crate::config::next_free_path(&dir, &c.filename_pattern, fmt.ext());
-        let name = suggested.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let filter = match fmt {
-            VideoFormat::Mp4 => (t("MP4 video"), "mp4"),
-            VideoFormat::Gif => (t("GIF animation"), "gif"),
-        };
-        let Some(path) = rfd::FileDialog::new()
-            .set_title(t("Save recording as"))
-            .set_directory(&dir)
-            .set_file_name(name)
-            .add_filter(filter.0, &[filter.1])
-            .save_file()
-        else {
-            return;
+        let path = if ask {
+            let name = suggested.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let filter = match fmt {
+                VideoFormat::Mp4 => (t("MP4 video"), "mp4"),
+                VideoFormat::Gif => (t("GIF animation"), "gif"),
+            };
+            let picked = rfd::FileDialog::new()
+                .set_title(t("Save recording as"))
+                .set_directory(&dir)
+                .set_file_name(name)
+                .add_filter(filter.0, &[filter.1])
+                .save_file();
+            let Some(path) = picked else { return };
+            path
+        } else {
+            suggested
         };
         let progress = Arc::new(AtomicU32::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -540,12 +548,18 @@ impl eframe::App for ClipApp {
                             ui.add(egui::ProgressBar::new(p).desired_width(180.0).show_percentage());
                             ctx.request_repaint_after(Duration::from_millis(100));
                         } else {
-                            let save = egui::Button::new(semibold(t("Save as..."), 14.0).color(theme::INK))
+                            // Right to left: Save (in the recordings folder) is the main button.
+                            let save = egui::Button::new(semibold(t("Save"), 14.0).color(theme::INK))
                                 .fill(theme::ACCENT)
-                                .min_size(vec2(110.0, 30.0));
-                            if ui.add(save).clicked() {
+                                .min_size(vec2(90.0, 30.0));
+                            let folder = self.folder.clone();
+                            if ui.add(save).on_hover_text(tf("Saves in {0}", &[&folder.display()])).clicked() {
                                 self.playing = None;
-                                self.start_export();
+                                self.start_export(false);
+                            }
+                            if ui.add(egui::Button::new(t("Save as...")).min_size(vec2(90.0, 30.0))).clicked() {
+                                self.playing = None;
+                                self.start_export(true);
                             }
                         }
                     });

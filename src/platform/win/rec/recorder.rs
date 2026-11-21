@@ -28,6 +28,7 @@ use crate::rec::events::{self, Event, Header, Kind, Timeline};
 use crate::rec::export::{self, Job, Trim, VideoSource};
 use crate::rec::keys::{self, KeyMode, Shown};
 use crate::rec::store::{Outcome, Rec, Spec, Status};
+use crate::rec::yuv::Nv12;
 use crate::theme;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -667,15 +668,17 @@ fn capture(rec: &Rec, spec: &Spec, area: IRect, monitor: IRect, shared: &Shared)
     let gdi = grabber.name() == "GDI BitBlt";
     let fps = if gdi { spec.settings.fps.min(15) } else { spec.settings.fps }.clamp(5, 60);
     log(&format!("capturing with {} at {fps} fps", grabber.name()));
-    // Wider than the encoder takes (an ultrawide screen): the video is made smaller.
-    let shrink = crate::rec::shrink_factor(area.w as u32, area.h as u32);
+    // Half size on a sharp screen (200%: it then looks like the same screen at 100%), unless
+    // the settings ask for every pixel; and smaller still where the encoder needs it.
+    let hidpi = if !spec.settings.full_resolution && spec.scale >= 1.75 { 2 } else { 1 };
+    let shrink = crate::rec::shrink_factor_from(area.w as u32, area.h as u32, hidpi);
     let zoom = 1.0 / shrink as f32;
     let (vw, vh) = (area.w as u32 / shrink, area.h as u32 / shrink);
     if shrink > 1 {
-        log(&format!("the area is larger than the encoder takes: recording at 1/{shrink} size"));
+        log(&format!("recording at 1/{shrink} size: {vw}x{vh}"));
     }
     let bitrate = export::master_bitrate(vw, vh, fps);
-    let mut writer = match Mp4Writer::create(&rec.master(), vw, vh, fps, bitrate, fps) {
+    let writer = match Mp4Writer::create(&rec.master(), vw, vh, fps, bitrate, fps) {
         Ok(w) => w,
         Err(MfError::NoMediaFoundation) => {
             return Ok(Outcome { no_media_foundation: true, ..Outcome::failed("Media Foundation is missing".into()) })
@@ -704,6 +707,39 @@ fn capture(rec: &Rec, spec: &Spec, area: IRect, monitor: IRect, shared: &Shared)
         std::thread::sleep(Duration::from_millis(15));
     }
 
+    // The encoder runs on a thread of its own, so a slow frame never holds up the next
+    // capture. Frames go there in a few buffers that come back once written; when none is
+    // free, the encoder is behind and this frame is left out (the one before it lasts longer).
+    const BUFFERS: usize = 3;
+    let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<(u32, Nv12)>(BUFFERS);
+    let (back_tx, back_rx) = std::sync::mpsc::channel::<Nv12>();
+    for _ in 0..BUFFERS {
+        let _ = back_tx.send(Nv12::default());
+    }
+    let encoder_failed = Arc::new(AtomicBool::new(false));
+    let encoder = {
+        let failed = encoder_failed.clone();
+        std::thread::spawn(move || -> Result<(), String> {
+            com_init();
+            let mut writer = writer;
+            let mut error = None;
+            while let Ok((t, frame)) = frame_rx.recv() {
+                if error.is_none() {
+                    if let Err(e) = writer.write(&frame, t) {
+                        failed.store(true, Ordering::SeqCst);
+                        error = Some(tf("Writing the video failed: {0}", &[&e]));
+                    }
+                }
+                let _ = back_tx.send(frame);
+            }
+            writer.finish().map_err(|e| tf("Closing the video failed: {0}", &[&e]))?;
+            error.map_or(Ok(()), Err)
+        })
+    };
+    // Sleep in steps of 1 ms instead of Windows' default 15.6, for an even frame rate.
+    unsafe { windows_sys::Win32::Media::timeBeginPeriod(1) };
+    let (mut written, mut dropped, mut busy_ms) = (0u32, 0u32, 0u128);
+
     let (tx, rx) = std::sync::mpsc::channel::<Input>();
     let hook = hooks::start(keys_mode, tx);
     let epoch = Instant::now();
@@ -723,7 +759,7 @@ fn capture(rec: &Rec, spec: &Spec, area: IRect, monitor: IRect, shared: &Shared)
 
     loop {
         let stop = shared.stop.load(Ordering::SeqCst);
-        if stop != RUN {
+        if stop != RUN || encoder_failed.load(Ordering::SeqCst) {
             break;
         }
         let now = ms_since(epoch, Instant::now());
@@ -748,6 +784,7 @@ fn capture(rec: &Rec, spec: &Spec, area: IRect, monitor: IRect, shared: &Shared)
             std::thread::sleep(Duration::from_millis((target - t).min(20) as u64));
             continue;
         }
+        let started = Instant::now();
         // Fell behind (a slow encoder): skip to the frame of now.
         if t > target + 1000 / fps {
             next_k = t as u64 * fps as u64 / 1000;
@@ -777,13 +814,22 @@ fn capture(rec: &Rec, spec: &Spec, area: IRect, monitor: IRect, shared: &Shared)
         if !have_frame {
             continue;
         }
-        let written = if shrink > 1 {
-            let (sw, _) = crate::rec::shrink_bgra(&buf, area.w as u32, area.h as u32, shrink, &mut small);
-            writer.write_bgra(&small, sw as usize * 4, frame_t)
-        } else {
-            writer.write_bgra(&buf, area.w as usize * 4, frame_t)
-        };
-        written.map_err(|e| tf("Writing the video failed: {0}", &[&e]))?;
+        match back_rx.try_recv() {
+            Ok(mut frame) => {
+                if shrink > 1 {
+                    let (sw, sh) = crate::rec::shrink_bgra(&buf, area.w as u32, area.h as u32, shrink, &mut small);
+                    frame.set_from_bgra(&small, sw as usize * 4, sw, sh);
+                } else {
+                    frame.set_from_bgra(&buf, area.w as usize * 4, area.w as u32, area.h as u32);
+                }
+                if frame_tx.send((frame_t, frame)).is_err() {
+                    break;
+                }
+                written += 1;
+            }
+            Err(_) => dropped += 1,
+        }
+        busy_ms += started.elapsed().as_millis();
         last_t = frame_t;
 
         // The pointer: its shape (each new one saved once) and where it is.
@@ -857,13 +903,18 @@ fn capture(rec: &Rec, spec: &Spec, area: IRect, monitor: IRect, shared: &Shared)
         }
     }
     drop(hook);
+    unsafe { windows_sys::Win32::Media::timeEndPeriod(1) };
     let stop = shared.stop.load(Ordering::SeqCst);
     let duration = last_t + 1000 / fps;
-    writer.finish().map_err(|e| tf("Closing the video failed: {0}", &[&e]))?;
-    drop(writer);
+    drop(frame_tx);
+    let encoded = encoder.join().map_err(|_| t("The recording stopped unexpectedly.").to_string())?;
     let _ = log_out.flush();
     drop(log_out);
-    log(&format!("recorded {duration} ms"));
+    log(&format!(
+        "recorded {duration} ms: {written} frames, {dropped} left out because the encoder was busy, {:.1} ms per frame to capture and convert",
+        busy_ms as f64 / (written + dropped).max(1) as f64
+    ));
+    encoded?;
 
     if stop == DISCARD || stop == CANCEL || !have_frame {
         for p in [rec.master(), rec.events()] {
@@ -952,13 +1003,13 @@ pub fn export_file(
             let writer = Mp4Writer::create(path, w, h, fps, export::mp4_bitrate(w, h, fps), fps * 2)
                 .map_err(|e| e.to_string())?;
             let mut sink = Mp4Sink { writer, path: path.to_path_buf() };
-            let job = Job { trim, overlays, fps, max_width: None };
+            let job = Job { trim, overlays, fps };
             export::export(&mut reader, &clip, &job, &mut sink, fonts, progress)
         }
         VideoFormat::Gif => {
             let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-            let mut sink = crate::rec::gif::GifSink::new(BufWriter::new(file));
-            let job = Job { trim, overlays, fps: GIF_FPS, max_width: Some(gif_max_width.max(64)) };
+            let mut sink = crate::rec::gif::GifSink::new(BufWriter::new(file)).max_width(Some(gif_max_width.max(64)));
+            let job = Job { trim, overlays, fps: GIF_FPS };
             export::export(&mut reader, &clip, &job, &mut sink, fonts, progress)
         }
     }

@@ -2,6 +2,16 @@
 
 All notable changes to Blink, per version. Every version is on [GitHub](https://github.com/blink-screenshot/blink/releases) with its installer; the release notes are taken from this file.
 
+## [1.3.2] - 2026-11-21
+
+### Improvements
+
+- **Smooth recordings on 4K screens.** Recording kept up badly on high-resolution screens, so videos played back at a few frames per second. Blink now prepares each frame on all processor cores and hands it to the video encoder separately, so capturing never waits for encoding.
+- **Half size on sharp screens.** On a screen at 200% scaling or more, recordings are made at half size, which looks like the same screen at 100%: text stays readable, files are four times smaller, and recording and saving are much faster. Choose *Full resolution* in Settings > Recording to keep every pixel.
+- **Saving is much faster**, after a recording and in the clip window: the pointer, clicks and keys are now drawn only where they are, instead of converting every whole frame twice.
+- **The GIF size estimate is ready sooner.**
+- **The clip window starts on GIF** and has a **Save** button that saves straight to your recordings folder, next to *Save as...*.
+
 ## [1.3.1] - 2026-11-21
 
 ### Bug fixes
