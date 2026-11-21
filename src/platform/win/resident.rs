@@ -1127,18 +1127,21 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, c: &Config) {
         };
         return deliver(hwnd, img, pointer, &chosen);
     }
+    // Copy and Save get the pointer drawn in; the editor gets it as a separate object.
+    // Shared with the history thread instead of copied for it (a full screen at 4K is 33 MB).
+    let img = std::sync::Arc::new(img);
+    let flat = pointer.as_ref().map(|p| {
+        let mut f = (*img).clone();
+        imageio::flatten(&mut f, p);
+        std::sync::Arc::new(f)
+    });
     if c.history_size > 0 {
         // PNG takes a moment for a big screenshot: not on the thread that answers hotkeys.
-        let (copy, ptr, limits) = (img.clone(), pointer.clone(), crate::history::Limits::from_config(c));
-        std::thread::spawn(move || crate::history::add(&copy, ptr.as_ref(), limits).ok());
+        let (img, flat, ptr) = (img.clone(), flat.clone(), pointer.clone());
+        let limits = crate::history::Limits::from_config(c);
+        std::thread::spawn(move || crate::history::add(&img, flat.as_deref(), ptr.as_ref(), limits).ok());
     }
-    // Copy and Save get the pointer drawn in; the editor gets it as a separate object.
-    let flat = pointer.as_ref().map(|p| {
-        let mut f = img.clone();
-        imageio::flatten(&mut f, p);
-        f
-    });
-    let out = flat.as_ref().unwrap_or(&img);
+    let out: &RgbaImage = flat.as_deref().unwrap_or(&img);
     let mut lines = Vec::new();
     let mut warning = false;
     let mut copied = false;

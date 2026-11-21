@@ -5,6 +5,11 @@ use super::MonitorInfo;
 
 pub fn init_process() {}
 
+/// Not mapped here: the caller reads the file instead.
+pub fn map_file(_path: &std::path::Path) -> Option<&'static [u8]> {
+    None
+}
+
 pub fn run_resident() -> Result<(), String> {
     Err("The tray/capture part of Blink only runs on Windows. Use --open <file> to try the editor.".into())
 }

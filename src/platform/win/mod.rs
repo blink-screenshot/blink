@@ -50,6 +50,34 @@ pub fn init_process() {
     }
 }
 
+/// Maps a file into memory, read only, for the rest of the process: its pages come from the
+/// file cache and are shared, instead of being a private copy (the tray keeps its two fonts
+/// this way). `None` when it cannot be mapped; read the file instead.
+pub fn map_file(path: &Path) -> Option<&'static [u8]> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Memory::{CreateFileMappingW, MapViewOfFile, FILE_MAP_READ, PAGE_READONLY};
+    let file = std::fs::File::open(path).ok()?;
+    let len = usize::try_from(file.metadata().ok()?.len()).ok().filter(|&n| n > 0)?;
+    unsafe {
+        let mapping =
+            CreateFileMappingW(file.as_raw_handle() as _, std::ptr::null(), PAGE_READONLY, 0, 0, std::ptr::null());
+        if mapping.is_null() {
+            return None;
+        }
+        let view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+        // The view keeps the mapping and the file open by itself.
+        CloseHandle(mapping);
+        if view.Value.is_null() {
+            return None;
+        }
+        // Safe: the view is `len` bytes (the whole file), readable, and never unmapped, so
+        // the slice stays valid for the rest of the process. Nothing in Blink writes to it;
+        // Windows does not let the file be changed or shortened while it is mapped.
+        Some(std::slice::from_raw_parts(view.Value as *const u8, len))
+    }
+}
+
 pub fn show_error(title: &str, msg: &str) {
     let t = wide(title);
     let m = wide(msg);

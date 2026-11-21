@@ -196,10 +196,22 @@ pub fn select(shot: &Shot, windows: Vec<WinInfo>, mode: Mode, magnifier: bool) -
 
         let r = shot.rect;
         let screen = GetDC(std::ptr::null_mut());
-        let bright = dib_from_bgra(screen, r.w, r.h, &shot.bgra);
-        let dimmed: Vec<u8> = shot.bgra.chunks_exact(4).flat_map(|p| [dim(p[0]), dim(p[1]), dim(p[2]), 255]).collect();
-        let dim = dib_from_bgra(screen, r.w, r.h, &dimmed);
-        drop(dimmed);
+        // The bright screen is the shot's own bitmap (no copy); the dimmed one is written
+        // straight into its bitmap (no copy in between). See `cleanup` for why `bmp` is null.
+        let bright = {
+            let dc = CreateCompatibleDC(screen);
+            let old = if dc.is_null() { std::ptr::null_mut() } else { SelectObject(dc, shot.bitmap() as HGDIOBJ) };
+            if old.is_null() && !dc.is_null() {
+                DeleteDC(dc);
+            }
+            (!old.is_null()).then_some(Gdi { dc, bmp: std::ptr::null_mut(), old })
+        };
+        let src = shot.bgra();
+        let dim = dib_with(screen, r.w, r.h, |dst| {
+            for (d, p) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+                d.copy_from_slice(&[dim(p[0]), dim(p[1]), dim(p[2]), 255]);
+            }
+        });
         let back_dc = CreateCompatibleDC(screen);
         let back_bmp = CreateCompatibleBitmap(screen, r.w, r.h);
         let back_old = SelectObject(back_dc, back_bmp);
@@ -208,8 +220,16 @@ pub fn select(shot: &Shot, windows: Vec<WinInfo>, mode: Mode, magnifier: bool) -
         let mut pt = POINT { x: 0, y: 0 };
         GetCursorPos(&mut pt);
         let scale = monitor_at(pt).map_or(1.0, |m| m.2).max(1.0);
-        let (Some(bright), Some(dim)) = (bright, dim) else {
-            return None;
+        let (bright, dim) = match (bright, dim) {
+            (Some(bright), Some(dim)) => (bright, dim),
+            (bright, dim) => {
+                // Out of memory: free what was made (and deselect the shot's bitmap).
+                for g in [bright, dim].into_iter().flatten() {
+                    g.release();
+                }
+                Gdi { dc: back_dc, bmp: back_bmp, old: back_old }.release();
+                return None;
+            }
         };
         let state = State {
             origin: (r.x, r.y),
@@ -298,6 +318,12 @@ fn dim(c: u8) -> u8 {
 }
 
 unsafe fn dib_from_bgra(screen: HDC, w: i32, h: i32, data: &[u8]) -> Option<Gdi> {
+    dib_with(screen, w, h, |bits| bits[..data.len()].copy_from_slice(data))
+}
+
+/// A `w` x `h` 32-bit DIB section, selected into its own DC; `fill` writes its pixels (BGRA,
+/// top-down) straight into the bitmap's memory.
+unsafe fn dib_with(screen: HDC, w: i32, h: i32, fill: impl FnOnce(&mut [u8])) -> Option<Gdi> {
     let mut bmi: BITMAPINFO = std::mem::zeroed();
     bmi.bmiHeader = BITMAPINFOHEADER {
         biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -313,7 +339,9 @@ unsafe fn dib_from_bgra(screen: HDC, w: i32, h: i32, data: &[u8]) -> Option<Gdi>
     if bmp.is_null() || bits.is_null() {
         return None;
     }
-    std::ptr::copy_nonoverlapping(data.as_ptr(), bits as *mut u8, data.len());
+    // Safe: CreateDIBSection gave `bits` as the bitmap's memory, w * h * 4 bytes, and
+    // nothing else uses the new bitmap yet.
+    fill(std::slice::from_raw_parts_mut(bits as *mut u8, w as usize * h as usize * 4));
     let dc = CreateCompatibleDC(screen);
     let old = SelectObject(dc, bmp);
     Some(Gdi { dc, bmp, old })
@@ -333,6 +361,9 @@ fn cleanup() {
     STATE.with(|s| {
         if let Some(st) = s.borrow_mut().take() {
             unsafe {
+                // `bright` selects the shot's own bitmap: its `bmp` is null, so `release`
+                // only deselects it and deletes the DC (DeleteObject(null) does nothing), and
+                // the shot, which owns the bitmap, deletes it when it is dropped.
                 st.bright.release();
                 st.dim.release();
                 st.back.release();
@@ -504,8 +535,11 @@ fn start_qr(s: &mut State) {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut found = Vec::new();
-        for (r, bgra) in parts {
-            for c in crate::qr::find_bgra(&bgra, r.w as usize, r.h as usize) {
+        // Only the brightness is kept while the (slow) search runs: a quarter of the copies,
+        // each copy freed as soon as it is converted.
+        let parts: Vec<(IRect, Vec<u8>)> = parts.into_iter().map(|(r, bgra)| (r, crate::qr::luma(&bgra))).collect();
+        for (r, gray) in parts {
+            for c in crate::qr::find_luma(&gray, r.w as usize, r.h as usize) {
                 let (x, y, w, h) = c.rect;
                 found.push((IRect { x: x + r.x - origin.0, y: y + r.y - origin.1, w, h }, c.content));
             }

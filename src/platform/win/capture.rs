@@ -7,8 +7,9 @@ use image::RgbaImage;
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
 use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows_sys::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EnumDisplayMonitors, GetDC, ReleaseDC,
-    SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HDC, HMONITOR, SRCCOPY,
+    BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EnumDisplayMonitors, GdiFlush, GetDC,
+    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HBITMAP, HDC, HMONITOR,
+    SRCCOPY,
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -62,12 +63,43 @@ impl IRect {
 }
 
 /// A captured BGRA bitmap (top-down) positioned in virtual-screen coordinates.
+///
+/// The pixels stay in the GDI bitmap (DIB section) they were captured into, and the overlay
+/// shows that same bitmap: no copy of the screen in a `Vec`, and none in the overlay (at 4K
+/// each copy is 33 MB).
 pub struct Shot {
     pub rect: IRect,
-    pub bgra: Vec<u8>,
+    bmp: HBITMAP,
+    /// The pixels of `bmp`: `rect.w * rect.h * 4` bytes, owned by `bmp`.
+    bits: *const u8,
+}
+
+impl Drop for Shot {
+    fn drop(&mut self) {
+        // Frees the pixels too. The overlay has deselected the bitmap again by then: it only
+        // borrows the shot while `overlay::select` runs.
+        unsafe {
+            DeleteObject(self.bmp);
+        }
+    }
 }
 
 impl Shot {
+    /// The pixels, BGRA, top-down, `rect.w * 4` bytes per row.
+    pub fn bgra(&self) -> &[u8] {
+        let len = self.rect.w as usize * self.rect.h as usize * 4;
+        // Safe: `bits` is the memory of the DIB section `bmp`, `len` bytes, valid until
+        // `bmp` is deleted in `drop`; nothing writes to it after `grab` (the overlay only
+        // copies from it), and the slice cannot outlive `self`.
+        unsafe { std::slice::from_raw_parts(self.bits, len) }
+    }
+
+    /// The bitmap with the pixels, to select into a DC and draw from (read only). It stays
+    /// owned by the shot: never delete it, and deselect it before the shot is dropped.
+    pub fn bitmap(&self) -> HBITMAP {
+        self.bmp
+    }
+
     /// Copies a sub-rectangle (virtual-screen coordinates) out as RGBA.
     pub fn crop_rgba(&self, r: IRect) -> Option<RgbaImage> {
         let r = r.intersect(&self.rect);
@@ -79,7 +111,7 @@ impl Shot {
         for y in 0..r.h {
             let sy = (r.y - self.rect.y + y) as usize;
             let sx = (r.x - self.rect.x) as usize;
-            let row = &self.bgra[sy * stride + sx * 4..sy * stride + (sx + r.w as usize) * 4];
+            let row = &self.bgra()[sy * stride + sx * 4..sy * stride + (sx + r.w as usize) * 4];
             for p in row.chunks_exact(4) {
                 out.extend_from_slice(&[p[2], p[1], p[0], 255]);
             }
@@ -98,7 +130,7 @@ impl Shot {
         for y in 0..r.h {
             let sy = (r.y - self.rect.y + y) as usize;
             let sx = (r.x - self.rect.x) as usize;
-            out.extend_from_slice(&self.bgra[sy * stride + sx * 4..sy * stride + (sx + r.w as usize) * 4]);
+            out.extend_from_slice(&self.bgra()[sy * stride + sx * 4..sy * stride + (sx + r.w as usize) * 4]);
         }
         Some((r, out))
     }
@@ -158,12 +190,17 @@ pub fn grab(r: IRect) -> Option<Shot> {
         let mut result = None;
         if !bmp.is_null() && !bits.is_null() {
             let old = SelectObject(mem, bmp);
-            if BitBlt(mem, 0, 0, r.w, r.h, screen, r.x, r.y, SRCCOPY | CAPTUREBLT) != 0 {
-                let len = r.w as usize * r.h as usize * 4;
-                let data = std::slice::from_raw_parts(bits as *const u8, len).to_vec();
-                result = Some(Shot { rect: r, bgra: data });
-            }
+            let ok = BitBlt(mem, 0, 0, r.w, r.h, screen, r.x, r.y, SRCCOPY | CAPTUREBLT) != 0;
+            // GDI may batch drawing: done before the pixels are read straight from memory.
+            GdiFlush();
             SelectObject(mem, old);
+            if ok {
+                // The shot keeps the bitmap (and deletes it when dropped).
+                result = Some(Shot { rect: r, bmp, bits: bits as *const u8 });
+            } else {
+                DeleteObject(bmp);
+            }
+        } else if !bmp.is_null() {
             DeleteObject(bmp);
         }
         DeleteDC(mem);
