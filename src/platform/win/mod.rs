@@ -261,6 +261,16 @@ pub fn open_keyboard_settings() {
     open_folder(Path::new("ms-settings:easeofaccess-keyboard"));
 }
 
+/// Opens a web link in the default browser. Only call it with links checked by
+/// `qr::is_web_link` (ShellExecute also runs programs and app protocols).
+pub(crate) fn open_url(url: &str) {
+    let op = wide("open");
+    let u = wide(url);
+    unsafe {
+        ShellExecuteW(std::ptr::null_mut(), op.as_ptr(), u.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
+    }
+}
+
 pub fn open_folder(path: &Path) {
     let op = wide("open");
     let p = wide(&path.display().to_string());

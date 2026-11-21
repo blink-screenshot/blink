@@ -41,6 +41,7 @@ pub fn run(page: Option<&str>) -> Result<(), String> {
                 hotkeys_read: Instant::now(),
                 editing: None,
                 recording: None,
+                history_cleared: false,
                 logo: crate::editor::logo_texture(&cc.egui_ctx),
             }))
         }),
@@ -90,6 +91,8 @@ struct SettingsApp {
     editing: Option<&'static str>,
     /// The hotkey that takes the next key press.
     recording: Option<&'static str>,
+    /// "Clear history" was pressed (shows that it worked).
+    history_cleared: bool,
     logo: egui::TextureHandle,
 }
 
@@ -554,6 +557,13 @@ impl SettingsApp {
             t("Show magnifier while selecting"),
             Some(("magnifier", t("A zoomed view of the pixels around the mouse pointer, to start and end a selection on exactly the right pixel."))),
         );
+        section(ui, t("Mouse pointer"));
+        check(
+            ui,
+            &mut c.capture_pointer,
+            t("Include the mouse pointer"),
+            Some(("pointer", t("Captures the mouse pointer where it is when you press the hotkey. In the editor it is a separate object: drag it elsewhere, or select it and press Delete. Copy and Save draw it into the screenshot. Not for captures started from the tray menu (the pointer would only show the menu) or scrolling captures."))),
+        );
         section(ui, t("Scrolling capture"));
         egui::Grid::new("scroll").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
             ui.label(t("Wait per scroll step"));
@@ -577,6 +587,22 @@ impl SettingsApp {
                     .color(pal().warn),
             );
         }
+        section(ui, t("History"));
+        ui.horizontal(|ui| {
+            ui.label(t("Keep the last"));
+            ui.add(egui::DragValue::new(&mut self.cfg.history_size).range(0..=crate::history::MAX_KEEP));
+            ui.label(t("screenshots"));
+            info(ui, "history", t("Your latest screenshots, under History in the tray menu. Click one to copy it again, with the same Edit and Save buttons as after a capture. They are stored only on this PC, in your local app data folder. 0 turns History off and deletes what it kept."));
+        });
+        ui.horizontal(|ui| {
+            if ui.button(t("Clear history")).clicked() {
+                crate::history::clear();
+                self.history_cleared = true;
+            }
+            if self.history_cleared {
+                ui.label(RichText::new(t("History cleared.")).color(pal().muted));
+            }
+        });
     }
 
     fn editor(&mut self, ui: &mut egui::Ui) {

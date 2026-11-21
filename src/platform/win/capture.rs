@@ -339,3 +339,97 @@ pub fn app_window(hwnd: HWND) -> Option<HWND> {
 pub fn foreground_app_window() -> Option<HWND> {
     app_window(unsafe { GetForegroundWindow() })
 }
+
+/// The mouse pointer as it is on screen: its image (straight alpha) and the screen position of
+/// its top-left corner. `None` when it is hidden (e.g. while typing, or on a touch screen).
+pub fn grab_pointer() -> Option<(RgbaImage, i32, i32)> {
+    use windows_sys::Win32::Graphics::Gdi::{GetObjectW, BITMAP};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DrawIconEx, GetCursorInfo, GetIconInfo, CURSORINFO, CURSOR_SHOWING, DI_NORMAL, HICON, ICONINFO,
+    };
+    unsafe {
+        let mut ci: CURSORINFO = std::mem::zeroed();
+        ci.cbSize = std::mem::size_of::<CURSORINFO>() as u32;
+        if GetCursorInfo(&mut ci) == 0 || ci.flags & CURSOR_SHOWING == 0 || ci.hCursor.is_null() {
+            return None;
+        }
+        let cursor = ci.hCursor as HICON;
+        let mut ii: ICONINFO = std::mem::zeroed();
+        if GetIconInfo(cursor, &mut ii) == 0 {
+            return None;
+        }
+        let mono = ii.hbmColor.is_null();
+        let mut bm: BITMAP = std::mem::zeroed();
+        let src = if mono { ii.hbmMask } else { ii.hbmColor };
+        let ok =
+            GetObjectW(src, std::mem::size_of::<BITMAP>() as i32, &mut bm as *mut BITMAP as *mut core::ffi::c_void);
+        if !ii.hbmColor.is_null() {
+            DeleteObject(ii.hbmColor);
+        }
+        if !ii.hbmMask.is_null() {
+            DeleteObject(ii.hbmMask);
+        }
+        // A monochrome cursor's mask holds the AND and the XOR half on top of each other.
+        let (w, h) = (bm.bmWidth, if mono { bm.bmHeight / 2 } else { bm.bmHeight });
+        if ok == 0 || w <= 0 || h <= 0 || w > 512 || h > 512 {
+            return None;
+        }
+        // Drawn on black and on white: the difference gives the transparency.
+        let draw = |bg: u8| -> Option<Vec<u8>> {
+            let screen = GetDC(std::ptr::null_mut());
+            let mem = CreateCompatibleDC(screen);
+            let mut bmi: BITMAPINFO = std::mem::zeroed();
+            bmi.bmiHeader = BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w,
+                biHeight: -h,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                ..std::mem::zeroed()
+            };
+            let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+            let bmp = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+            let mut out = None;
+            if !bmp.is_null() && !bits.is_null() {
+                let old = SelectObject(mem, bmp);
+                let len = w as usize * h as usize * 4;
+                std::ptr::write_bytes(bits as *mut u8, bg, len);
+                if DrawIconEx(mem, 0, 0, cursor, w, h, 0, std::ptr::null_mut(), DI_NORMAL) != 0 {
+                    out = Some(std::slice::from_raw_parts(bits as *const u8, len).to_vec());
+                }
+                SelectObject(mem, old);
+                DeleteObject(bmp);
+            }
+            DeleteDC(mem);
+            ReleaseDC(std::ptr::null_mut(), screen);
+            out
+        };
+        let (on_black, on_white) = (draw(0)?, draw(255)?);
+        let img = pointer_from_backgrounds(&on_black, &on_white, w as u32, h as u32)?;
+        Some((img, ci.ptScreenPos.x - ii.xHotspot as i32, ci.ptScreenPos.y - ii.yHotspot as i32))
+    }
+}
+
+/// Straight-alpha RGBA from the same cursor drawn on black and on white (BGRA). Pixels that
+/// invert the screen (the text cursor) come out black, as they look on a light page.
+pub fn pointer_from_backgrounds(on_black: &[u8], on_white: &[u8], w: u32, h: u32) -> Option<RgbaImage> {
+    let mut out = Vec::with_capacity(on_black.len());
+    for (b, wh) in on_black.chunks_exact(4).zip(on_white.chunks_exact(4)) {
+        let inverts = (0..3).any(|i| b[i] as i32 - wh[i] as i32 > 128);
+        if inverts {
+            out.extend_from_slice(&[0, 0, 0, 255]);
+            continue;
+        }
+        let diff = (0..3).map(|i| wh[i] as i32 - b[i] as i32).max().unwrap_or(0).clamp(0, 255);
+        let a = 255 - diff;
+        if a == 0 {
+            out.extend_from_slice(&[0, 0, 0, 0]);
+            continue;
+        }
+        // On black the colour is premultiplied by alpha.
+        let c = |i: usize| ((b[i] as i32 * 255 + a / 2) / a).clamp(0, 255) as u8;
+        out.extend_from_slice(&[c(2), c(1), c(0), a as u8]);
+    }
+    RgbaImage::from_raw(w, h, out)
+}
