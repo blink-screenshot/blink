@@ -40,6 +40,8 @@ jobs:
       INPUT_VERSION: ${{ inputs.version }}
       ROLLBACK: ${{ inputs.rollback }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Promote
         shell: bash
         run: |
@@ -91,3 +93,10 @@ jobs:
               echo "Rolled back: $t is a pre-release again." | tee -a "$GITHUB_STEP_SUMMARY"
             done
           fi
+
+      # A release's notes list everything since the previous promoted release, and which one
+      # that is just changed. The release promoted now keeps its notes (it is measured against
+      # the promoted releases before it); newer pre-releases, and those rolled back, change.
+      - name: Sync release notes
+        shell: bash
+        run: ./tools/sync_release_notes.sh

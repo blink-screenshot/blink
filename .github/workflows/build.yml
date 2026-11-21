@@ -76,6 +76,9 @@ jobs:
       - name: Third-party notices up to date
         run: python3 tools/third_party_notices.py --check
 
+      - name: Release notes script
+        run: python3 tools/release_notes.py --self-test
+
   # Which versions in CHANGELOG.md have no release tag yet, and which commit each one is.
   plan:
     if: github.ref == 'refs/heads/main'
@@ -181,9 +184,11 @@ jobs:
           prerelease: true
           make_latest: false
 
-  # Keeps the notes of every release equal to its CHANGELOG.md section. Run it by hand after
-  # editing CHANGELOG.md (Actions > Build > Run workflow, on main). It does not change which
-  # release is "latest" (what the in-app updater reads): only promote.yml does that.
+  # Keeps the notes of every release in step with CHANGELOG.md: each lists what is new since
+  # the previous promoted release (tools/release_notes.py), so the in-app updater shows it all
+  # to someone who skips versions. Run it by hand after editing CHANGELOG.md (Actions > Build >
+  # Run workflow, on main). It does not change which release is "latest" (what the in-app
+  # updater reads): only promote.yml does that.
   release-notes:
     needs: [plan, release]
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.release.result != 'failure' }}
@@ -196,24 +201,4 @@ jobs:
 
       - name: Sync release notes
         shell: bash
-        run: |
-          # Editing a release can make GitHub pick another "latest": put the current one back after.
-          latest=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
-          for version in $(grep -oP '^## \[\K[0-9]+\.[0-9]+\.[0-9]+(?=\])' CHANGELOG.md); do
-            tag="v$version"
-            if ! gh release view "$tag" > /dev/null 2>&1; then
-              echo "No release $tag (yet), skipped"
-              continue
-            fi
-            awk -v v="$version" '
-              /^## \[/ { on = index($0, "## [" v "]") == 1; next }
-              /^\[[0-9.]+\]: / { next }
-              on { print }
-            ' CHANGELOG.md > notes.md
-            gh release edit "$tag" --notes-file notes.md --title "Blink $version"
-            echo "Updated $tag"
-          done
-          if [ -n "$latest" ]; then
-            gh release edit "$latest" --latest
-            echo "Latest (unchanged): $latest"
-          fi
+        run: ./tools/sync_release_notes.sh
