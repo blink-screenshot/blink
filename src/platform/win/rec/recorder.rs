@@ -122,13 +122,18 @@ thread_local! {
     static UI: RefCell<Option<Ui>> = const { RefCell::new(None) };
 }
 
+/// Runs `f` on the window state. `None` when there is none, or when it is in use already:
+/// ShowWindow, UpdateLayeredWindow and the like send messages to our own window procedures
+/// right away, while the code that called them still holds the state. Those messages need
+/// nothing from it and go to DefWindowProc.
 fn with_ui<R>(f: impl FnOnce(&mut Ui) -> R) -> Option<R> {
-    UI.with(|u| u.borrow_mut().as_mut().map(f))
+    UI.with(|u| u.try_borrow_mut().ok()?.as_mut().map(f))
 }
 
 /// Runs a recording from its working folder. Always writes `result.json`.
 pub fn run(dir: &std::path::Path) -> Result<(), String> {
     let rec = Rec::at(dir);
+    super::log_panics(Some(rec.clone()));
     let spec = rec.read_spec()?;
     log(&format!(
         "recording {}x{} at ({}, {}) on monitor {:?}, scale {}, {} fps, keys {:?}",

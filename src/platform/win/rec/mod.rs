@@ -37,6 +37,25 @@ pub(crate) fn log(msg: &str) {
     }
 }
 
+/// Writes a panic (Blink is built with `panic = "abort"`, so the process ends right after) to
+/// `recorder.log`, and for the recorder also to `result.json`, so the tray can say what went
+/// wrong instead of "stopped unexpectedly".
+pub(crate) fn log_panics(rec: Option<Rec>) {
+    std::panic::set_hook(Box::new(move |info| {
+        let what = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        log(&format!("crash: {what} at {at}"));
+        if let Some(r) = &rec {
+            let _ = r.write_result(&Outcome::failed(format!("Blink crashed ({what} at {at}).")));
+        }
+    }));
+}
+
 /// The recorder's message window, if a recording runs.
 fn recorder_window() -> Option<windows_sys::Win32::Foundation::HWND> {
     let class = super::wide(RECORDER_CLASS);
@@ -54,6 +73,7 @@ pub fn stop_recording() -> bool {
 
 /// Opens a video for reading (the clip window). `size`: the size it should have.
 pub fn open_video(path: &Path, size: Option<(u32, u32)>) -> Result<Box<dyn VideoSource + Send>, String> {
+    log_panics(None);
     com_init();
     mf::Mp4Reader::open(path, size).map(|r| Box::new(r) as Box<dyn VideoSource + Send>).map_err(|e| media_error(&e))
 }
@@ -87,6 +107,7 @@ pub fn export_recording(
 /// `Blink --export-gif <dir>`: the "As GIF" button of the notification. Writes the GIF next to
 /// the MP4 with the settings' overlays, and its outcome to `<dir>/gif.json`.
 pub fn export_gif(dir: &Path) -> Result<(), String> {
+    log_panics(None);
     let rec = Rec::at(dir);
     let spec = rec.read_spec()?;
     let outcome = match recorder::save(&rec, &spec, VideoFormat::Gif, 0, &mut |_| true) {
