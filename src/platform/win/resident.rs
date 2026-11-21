@@ -171,6 +171,21 @@ fn start_update_checks(hwnd: HWND) {
     });
 }
 
+/// Removes expired History screenshots now (and those beyond the limits), in the background.
+fn prune_history() {
+    let limits = crate::history::Limits::from_config(&cfg());
+    std::thread::spawn(move || crate::history::prune(limits));
+}
+
+/// Removes expired History screenshots at start and every ten minutes after, so they are
+/// gone from the disk on time, not only when the menu opens.
+fn start_history_cleanup() {
+    std::thread::spawn(|| loop {
+        crate::history::prune(crate::history::Limits::from_config(&Config::load()));
+        std::thread::sleep(Duration::from_secs(600));
+    });
+}
+
 fn cfg() -> Config {
     CONFIG.with(|c| c.borrow().clone())
 }
@@ -276,6 +291,7 @@ pub fn run_resident() -> Result<(), String> {
             });
         }
         start_update_checks(hwnd);
+        start_history_cleanup();
 
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
@@ -869,7 +885,7 @@ fn history_label(e: &crate::history::Entry) -> String {
 /// The History submenu with a preview of every screenshot, and the entry ids in menu order.
 /// Windows makes a menu that is taller than the screen scroll.
 unsafe fn history_menu(parent: &PopupMenu) -> Option<(PopupMenu, Vec<u64>)> {
-    let entries = crate::history::list();
+    let entries = crate::history::list(crate::history::Limits::from_config(&cfg()));
     let mut sub = PopupMenu::new();
     if entries.is_empty() {
         sub.title(t("No screenshots yet"));
@@ -1035,8 +1051,8 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, c: &Config) {
     }
     if c.history_size > 0 {
         // PNG takes a moment for a big screenshot: not on the thread that answers hotkeys.
-        let (copy, ptr, keep) = (img.clone(), pointer.clone(), c.history_size);
-        std::thread::spawn(move || crate::history::add(&copy, ptr.as_ref(), keep).ok());
+        let (copy, ptr, limits) = (img.clone(), pointer.clone(), crate::history::Limits::from_config(c));
+        std::thread::spawn(move || crate::history::add(&copy, ptr.as_ref(), limits).ok());
     }
     // Copy and Save get the pointer drawn in; the editor gets it as a separate object.
     let flat = pointer.as_ref().map(|p| {
@@ -1298,8 +1314,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     if msg == RELOAD.with(|c| c.get()) {
         CONFIG.with(|c| *c.borrow_mut() = Config::load());
         cfg().apply_globals();
-        let keep = cfg().history_size;
-        std::thread::spawn(move || crate::history::prune(keep));
+        prune_history();
         register_hotkeys(hwnd, false);
         return 0;
     }

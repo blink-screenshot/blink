@@ -21,6 +21,25 @@ pub const THUMB_H: u32 = 120;
 /// The most screenshots the setting allows.
 pub const MAX_KEEP: u32 = 100;
 
+/// How much the history keeps (from the settings).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// The most screenshots; 0 = History is off.
+    pub keep: u32,
+    /// The oldest a screenshot may get, in hours; 0 = no limit.
+    pub max_age_hours: u32,
+}
+
+impl Limits {
+    pub fn from_config(c: &crate::config::Config) -> Self {
+        Self { keep: c.history_size, max_age_hours: c.history_max_age_hours }
+    }
+    /// Whether a screenshot taken at `id` (ms) is still kept at `now` (ms).
+    fn fresh(&self, id: u64, now: u64) -> bool {
+        self.max_age_hours == 0 || now.saturating_sub(id) <= self.max_age_hours as u64 * 3_600_000
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Meta {
     width: u32,
@@ -55,14 +74,14 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
-/// Adds a screenshot and removes the oldest beyond `keep`. Slow for big screenshots (PNG):
+/// Adds a screenshot and removes what is beyond the limits. Slow for big screenshots (PNG):
 /// call it off the UI thread.
-pub fn add(img: &RgbaImage, pointer: Option<&Pointer>, keep: u32) -> Result<u64, String> {
-    add_in(&dir(), img, pointer, keep, now_ms())
+pub fn add(img: &RgbaImage, pointer: Option<&Pointer>, limits: Limits) -> Result<u64, String> {
+    add_in(&dir(), img, pointer, limits, now_ms())
 }
 
-pub fn add_in(dir: &Path, img: &RgbaImage, pointer: Option<&Pointer>, keep: u32, now: u64) -> Result<u64, String> {
-    if keep == 0 {
+pub fn add_in(dir: &Path, img: &RgbaImage, pointer: Option<&Pointer>, limits: Limits, now: u64) -> Result<u64, String> {
+    if limits.keep == 0 {
         return Err("history is off".into());
     }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -84,7 +103,7 @@ pub fn add_in(dir: &Path, img: &RgbaImage, pointer: Option<&Pointer>, keep: u32,
     let meta = Meta { width: img.width(), height: img.height(), pointer: pointer.map(|p| (p.x, p.y)) };
     let json = serde_json::to_string(&meta).map_err(|e| e.to_string())?;
     std::fs::write(file(dir, id, ".json"), json).map_err(|e| e.to_string())?;
-    prune_in(dir, keep);
+    prune_in(dir, limits, now);
     Ok(id)
 }
 
@@ -96,11 +115,13 @@ fn fit(img: &RgbaImage) -> RgbaImage {
     image::imageops::thumbnail(img, w, h)
 }
 
-/// The screenshots, newest first.
-pub fn list() -> Vec<Entry> {
-    list_in(&dir())
+/// The screenshots within the limits, newest first.
+pub fn list(limits: Limits) -> Vec<Entry> {
+    let now = now_ms();
+    list_in(&dir()).into_iter().filter(|e| limits.fresh(e.id, now)).take(limits.keep as usize).collect()
 }
 
+/// Every finished entry on disk, newest first.
 pub fn list_in(dir: &Path) -> Vec<Entry> {
     let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut out: Vec<Entry> = rd
@@ -137,15 +158,16 @@ pub fn thumbnail(id: u64) -> Option<RgbaImage> {
     image::open(file(&dir(), id, ".thumb.png")).ok().map(|i| i.to_rgba8())
 }
 
-/// Removes the oldest screenshots beyond `keep`, and leftovers of entries that were never
-/// finished (no `.json`).
-pub fn prune(keep: u32) {
-    prune_in(&dir(), keep)
+/// Removes the screenshots beyond the limits (the oldest beyond `keep`, and those older than
+/// `max_age_hours`), and leftovers of entries that were never finished (no `.json`).
+pub fn prune(limits: Limits) {
+    prune_in(&dir(), limits, now_ms())
 }
 
-pub fn prune_in(dir: &Path, keep: u32) {
+pub fn prune_in(dir: &Path, limits: Limits, now: u64) {
     let entries = list_in(dir);
-    let kept: std::collections::HashSet<u64> = entries.iter().take(keep as usize).map(|e| e.id).collect();
+    let kept: std::collections::HashSet<u64> =
+        entries.iter().filter(|e| limits.fresh(e.id, now)).take(limits.keep as usize).map(|e| e.id).collect();
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     let newest = entries.first().map_or(0, |e| e.id);
     for e in rd.flatten() {
@@ -187,8 +209,9 @@ mod tests {
     fn keeps_the_newest_and_loads_them_back() {
         let d = tmp("keep");
         let img = |v: u8| RgbaImage::from_pixel(400, 100, image::Rgba([v, v, v, 255]));
+        let limits = Limits { keep: 3, max_age_hours: 0 };
         for i in 0..5u64 {
-            add_in(&d, &img(i as u8), None, 3, 1000 + i).unwrap();
+            add_in(&d, &img(i as u8), None, limits, 1000 + i).unwrap();
         }
         let ids: Vec<u64> = list_in(&d).iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![1004, 1003, 1002]);
@@ -209,8 +232,9 @@ mod tests {
         let d = tmp("ptr");
         let img = RgbaImage::from_pixel(10, 10, image::Rgba([0, 0, 0, 255]));
         let p = Pointer { img: RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255])), x: 3, y: 4 };
-        let a = add_in(&d, &img, Some(&p), 10, 5).unwrap();
-        let b = add_in(&d, &img, None, 10, 5).unwrap();
+        let limits = Limits { keep: 10, max_age_hours: 0 };
+        let a = add_in(&d, &img, Some(&p), limits, 5).unwrap();
+        let b = add_in(&d, &img, None, limits, 5).unwrap();
         assert_ne!(a, b);
         let (back, ptr) = load_in(&d, a).unwrap();
         assert_eq!(back, img);
@@ -218,7 +242,29 @@ mod tests {
         // The preview shows the pointer.
         let thumb = image::open(file(&d, a, ".thumb.png")).unwrap().to_rgba8();
         assert_eq!(thumb.get_pixel(3, 4).0, [255, 0, 0, 255]);
-        assert!(add_in(&d, &img, None, 0, 9).is_err());
+        assert!(add_in(&d, &img, None, Limits { keep: 0, ..limits }, 9).is_err());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn old_screenshots_expire() {
+        let d = tmp("age");
+        let img = RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, 255]));
+        let hour = 3_600_000;
+        let day = Limits { keep: 10, max_age_hours: 24 };
+        let start = 100 * hour;
+        add_in(&d, &img, None, day, start).unwrap();
+        add_in(&d, &img, None, day, start + 20 * hour).unwrap();
+        assert_eq!(list_in(&d).len(), 2);
+        // 25 hours after the first one: it is gone, the second one stays.
+        prune_in(&d, day, start + 25 * hour);
+        let ids: Vec<u64> = list_in(&d).iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec![start + 20 * hour]);
+        assert!(!day.fresh(start, start + 25 * hour) && day.fresh(start, start + 24 * hour));
+        // No age limit: kept however old.
+        let forever = Limits { max_age_hours: 0, ..day };
+        prune_in(&d, forever, start + 10_000 * hour);
+        assert_eq!(list_in(&d).len(), 1);
         std::fs::remove_dir_all(&d).ok();
     }
 

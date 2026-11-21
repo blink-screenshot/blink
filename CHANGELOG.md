@@ -6,7 +6,7 @@ All notable changes to Blink, per version. Every version is on [GitHub](https://
 
 ### New features
 
-- **History.** Your latest screenshots are under *History* in the tray menu, each with a small preview. Click one to copy it again: the same notification as after a capture appears, with *Edit*, *Save* and *Save as*. Choose how many Blink keeps in Settings > Capture (20 by default, 0 turns it off), or clear it there. They are stored only on your PC.
+- **History.** Your latest screenshots are under *History* in the tray menu, each with a small preview. Click one to copy it again: the same notification as after a capture appears, with *Edit*, *Save* and *Save as*. By default Blink keeps the last 10 screenshots for 24 hours and then deletes them. In Settings > Capture you choose how many it keeps (0 turns History off) and for how many hours or days, or without a time limit, and you can clear it there. They are stored only on your PC.
 - **Read QR codes.** In the capture overlay, point at a QR code: it lights up and the label shows what it says. Click to copy it, or `Ctrl` + click to open a link in your browser (only web links open; anything else is copied).
 - **Mouse pointer in screenshots.** Turn on *Include the mouse pointer* in Settings > Capture. In the editor the pointer is a separate object you can move, resize or delete; Copy and Save draw it into the screenshot.
 - **Deutsch, Français, Español and Português.** Blink now also speaks German, French, Spanish and Brazilian Portuguese (Settings > General > Language).

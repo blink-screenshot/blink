@@ -31,6 +31,7 @@ pub fn run(page: Option<&str>) -> Result<(), String> {
             crate::editor::setup_theme(&cc.egui_ctx);
             crate::editor::style_title_bar(cc);
             let cfg = Config::load();
+            let history_unit = AgeUnit::of(cfg.history_max_age_hours);
             Ok(Box::new(SettingsApp {
                 saved: cfg.clone(),
                 cfg,
@@ -42,6 +43,7 @@ pub fn run(page: Option<&str>) -> Result<(), String> {
                 editing: None,
                 recording: None,
                 history_cleared: false,
+                history_unit,
                 logo: crate::editor::logo_texture(&cc.egui_ctx),
             }))
         }),
@@ -76,6 +78,31 @@ impl Page {
     }
 }
 
+/// How long History keeps a screenshot is entered in hours or days, or not limited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AgeUnit {
+    Hours,
+    Days,
+    Unlimited,
+}
+
+impl AgeUnit {
+    fn of(hours: u32) -> Self {
+        match hours {
+            0 => AgeUnit::Unlimited,
+            h if h.is_multiple_of(24) => AgeUnit::Days,
+            _ => AgeUnit::Hours,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            AgeUnit::Hours => t("hours"),
+            AgeUnit::Days => t("days"),
+            AgeUnit::Unlimited => t("Unlimited"),
+        }
+    }
+}
+
 struct SettingsApp {
     cfg: Config,
     /// The configuration as last saved (what the tray process uses).
@@ -93,6 +120,8 @@ struct SettingsApp {
     recording: Option<&'static str>,
     /// "Clear history" was pressed (shows that it worked).
     history_cleared: bool,
+    /// The unit the History age is entered in.
+    history_unit: AgeUnit,
     logo: egui::TextureHandle,
 }
 
@@ -588,11 +617,52 @@ impl SettingsApp {
             );
         }
         section(ui, t("History"));
-        ui.horizontal(|ui| {
-            ui.label(t("Keep the last"));
-            ui.add(egui::DragValue::new(&mut self.cfg.history_size).range(0..=crate::history::MAX_KEEP));
-            ui.label(t("screenshots"));
-            info(ui, "history", t("Your latest screenshots, under History in the tray menu. Click one to copy it again, with the same Edit and Save buttons as after a capture. They are stored only on this PC, in your local app data folder. 0 turns History off and deletes what it kept."));
+        egui::Grid::new("history").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+            ui.label(t("Number of screenshots"));
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut self.cfg.history_size).range(0..=crate::history::MAX_KEEP));
+                info(ui, "history", t("Your latest screenshots, under History in the tray menu. Click one to copy it again, with the same Edit and Save buttons as after a capture. Blink keeps at most this many, and deletes each one when it is older than the time you choose (by default 10 screenshots for 24 hours). They are stored only on this PC, in your local app data folder. 0 turns History off and deletes what it kept."));
+            });
+            ui.end_row();
+            ui.label(t("Keep them for"));
+            ui.horizontal(|ui| {
+                let h = &mut self.cfg.history_max_age_hours;
+                // Follows the setting when it changed elsewhere (Restore defaults).
+                let fits = match self.history_unit {
+                    AgeUnit::Unlimited => *h == 0,
+                    AgeUnit::Days => *h != 0 && h.is_multiple_of(24),
+                    AgeUnit::Hours => *h != 0,
+                };
+                if !fits {
+                    self.history_unit = AgeUnit::of(*h);
+                }
+                match self.history_unit {
+                    AgeUnit::Hours => {
+                        ui.add(egui::DragValue::new(h).range(1..=999));
+                    }
+                    AgeUnit::Days => {
+                        let mut days = *h / 24;
+                        ui.add(egui::DragValue::new(&mut days).range(1..=365));
+                        *h = days * 24;
+                    }
+                    AgeUnit::Unlimited => {}
+                }
+                let before = self.history_unit;
+                egui::ComboBox::from_id_salt("history_unit").selected_text(before.name()).show_ui(ui, |ui| {
+                    for u in [AgeUnit::Hours, AgeUnit::Days, AgeUnit::Unlimited] {
+                        ui.selectable_value(&mut self.history_unit, u, u.name());
+                    }
+                });
+                if self.history_unit != before {
+                    *h = match self.history_unit {
+                        AgeUnit::Unlimited => 0,
+                        AgeUnit::Days => (((*h).max(1) + 12) / 24).max(1) * 24,
+                        AgeUnit::Hours if *h == 0 => 24,
+                        AgeUnit::Hours => *h,
+                    };
+                }
+            });
+            ui.end_row();
         });
         ui.horizontal(|ui| {
             if ui.button(t("Clear history")).clicked() {
