@@ -29,12 +29,11 @@ const BUTTON_RADIUS: f32 = (CAPSULE_RADIUS as i8 - CAPSULE_MARGIN) as f32;
 
 pub fn setup_style(ctx: &egui::Context, fonts: &Arc<Fonts>) {
     let mut defs = FontDefinitions::default();
-    defs.font_data.insert("annot".into(), Arc::new(FontData::from_owned((*fonts.regular_bytes).clone())));
-    defs.font_data.insert("annot_bold".into(), Arc::new(FontData::from_owned((*fonts.bold_bytes).clone())));
-    defs.font_data.insert("annot_italic".into(), Arc::new(FontData::from_owned((*fonts.italic_bytes).clone())));
-    defs.font_data
-        .insert("annot_bold_italic".into(), Arc::new(FontData::from_owned((*fonts.bold_italic_bytes).clone())));
-    defs.font_data.insert("ui_semibold".into(), Arc::new(FontData::from_owned((*fonts.semibold_bytes).clone())));
+    defs.font_data.insert("annot".into(), Arc::new(FontData::from_static(fonts.regular_bytes)));
+    defs.font_data.insert("annot_bold".into(), Arc::new(FontData::from_static(fonts.bold_bytes)));
+    defs.font_data.insert("annot_italic".into(), Arc::new(FontData::from_static(fonts.italic_bytes)));
+    defs.font_data.insert("annot_bold_italic".into(), Arc::new(FontData::from_static(fonts.bold_italic_bytes)));
+    defs.font_data.insert("ui_semibold".into(), Arc::new(FontData::from_static(fonts.semibold_bytes)));
     for name in ["annot", "annot_bold", "annot_italic", "annot_bold_italic", "ui_semibold"] {
         defs.families.insert(FontFamily::Name(name.into()), vec![name.into()]);
     }

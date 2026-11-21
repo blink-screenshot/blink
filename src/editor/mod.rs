@@ -13,7 +13,7 @@ use crate::frame::{self, FrameSettings, Layout};
 use crate::i18n::{t, tf};
 use crate::imageio;
 use crate::platform;
-use crate::render::{crop_pixmap, unpremultiply, Fonts, Renderer};
+use crate::render::{crop_pixmap, crop_pixmap_owned, unpremultiply_owned, Fonts, Renderer};
 use eframe::egui::{self, Color32, Pos2, Rect, TextureHandle, Vec2};
 use image::RgbaImage;
 use prefs::EditorPrefs;
@@ -282,7 +282,9 @@ pub struct EditorApp {
     /// (annotation generation, pixels) at full size, and (generation, width, pixels) shrunk
     /// to the size it has in the preview.
     frame_full: Option<(u64, tiny_skia::Pixmap)>,
-    frame_src: Option<(u64, u32, tiny_skia::Pixmap)>,
+    /// The screenshot at preview size for the framed preview: `None` in the pixmap when it is
+    /// `frame_full` itself (no copy of a full-size image).
+    frame_src: Option<(u64, u32, Option<tiny_skia::Pixmap>)>,
     /// Bumped whenever the annotations or the crop change.
     ann_gen: u64,
     pub frame: FrameSettings,
@@ -433,7 +435,7 @@ impl EditorApp {
             }
         }
         let mut app = Self {
-            renderer: Renderer::new(&img, fonts.clone()),
+            renderer: Renderer::from_image(img, fonts.clone()),
             fonts,
             config,
             doc: Doc::default(),
@@ -713,10 +715,13 @@ impl EditorApp {
         let Some(l) = self.frame_layout() else {
             return self.renderer.export(&self.doc.anns, self.doc.crop);
         };
-        let shot = crop_pixmap(&self.renderer.render(&self.doc.anns, None), self.doc.crop);
+        let shot = crop_pixmap_owned(self.renderer.render(&self.doc.anns, None), self.doc.crop);
         let img = match frame::compose(&shot, &l, &self.frame, &self.fonts, 1.0) {
-            Some(pm) => unpremultiply(&pm),
-            None => unpremultiply(&shot),
+            Some(pm) => {
+                drop(shot);
+                unpremultiply_owned(pm)
+            }
+            None => unpremultiply_owned(shot),
         };
         // Fixed output sizes (social media, slides): exactly that many pixels.
         match self.frame.aspect.fixed_size() {
@@ -899,8 +904,16 @@ impl EditorApp {
     /// Small copy of the screenshot (cropped) for the background previews.
     pub fn shot_thumb(&mut self) -> Option<&tiny_skia::Pixmap> {
         if self.shot_thumb.is_none() {
-            let full = crop_pixmap(self.renderer.base(), self.doc.crop);
-            self.shot_thumb = frame::shrink_to_width(&full, 72.0).or(Some(full));
+            let base = self.renderer.base();
+            let whole = crate::render::crop_bounds(self.doc.crop, base.width(), base.height())
+                == (0, 0, base.width(), base.height());
+            // Not cropped: shrunk straight from the screenshot, without a full-size copy first.
+            self.shot_thumb = if whole {
+                frame::shrink_to_width(base, 72.0).or_else(|| Some(base.clone()))
+            } else {
+                let full = crop_pixmap(base, self.doc.crop);
+                frame::shrink_to_width(&full, 72.0).or(Some(full))
+            };
         }
         self.shot_thumb.as_ref()
     }
@@ -1073,10 +1086,14 @@ impl EditorApp {
             let scale = self.preview_scale(&l, ppp, canvas).min(cap / l.size.x.max(l.size.y));
             // The screenshot at the size it has in the preview (annotations drawn, cropped).
             let width = (l.shot.width() * scale).round().max(1.0) as u32;
-            let fresh = matches!(&self.frame_src, Some((g, w, _)) if *g == self.ann_gen && *w == width);
+            let fresh = matches!(&self.frame_src, Some((g, w, _)) if *g == self.ann_gen && *w == width)
+                && self.frame_full.is_some();
             if !fresh {
+                // Stale images go first, so old and new are not held at the same time.
+                self.frame_src = None;
                 if !matches!(&self.frame_full, Some((g, _)) if *g == self.ann_gen) {
-                    let full = crop_pixmap(&self.renderer.render(&self.doc.anns, self.tex_skip), self.doc.crop);
+                    self.frame_full = None;
+                    let full = crop_pixmap_owned(self.renderer.render(&self.doc.anns, self.tex_skip), self.doc.crop);
                     self.frame_full = Some((self.ann_gen, full));
                 }
                 let full = &self.frame_full.as_ref().expect("set above").1;
@@ -1085,14 +1102,13 @@ impl EditorApp {
                 } else {
                     None
                 };
-                self.frame_src = Some((self.ann_gen, width, shot.unwrap_or_else(|| full.clone())));
+                self.frame_src = Some((self.ann_gen, width, shot));
             }
-            let shot = &self.frame_src.as_ref().expect("set above").2;
+            let full = &self.frame_full.as_ref().expect("set above").1;
+            let shot = self.frame_src.as_ref().and_then(|s| s.2.as_ref()).unwrap_or(full);
             if let Some(out) = frame::compose(shot, &l, &self.frame, &self.fonts, scale) {
-                let img = egui::ColorImage::from_rgba_premultiplied(
-                    [out.width() as usize, out.height() as usize],
-                    out.data(),
-                );
+                let img = texture_image(&out, 0, 0, out.width() as usize, out.height() as usize);
+                drop(out);
                 let opts = egui::TextureOptions { magnification: egui::TextureFilter::Linear, ..opts };
                 match &mut self.frame_tex {
                     Some((t, lay, sc)) => {
@@ -1116,12 +1132,7 @@ impl EditorApp {
         for ty in (0..h).step_by(max_side) {
             for tx in (0..w).step_by(max_side) {
                 let (tw, th) = ((w - tx).min(max_side), (h - ty).min(max_side));
-                let mut data = Vec::with_capacity(tw * th * 4);
-                for y in ty..ty + th {
-                    let s = (y * w + tx) * 4;
-                    data.extend_from_slice(&pm.data()[s..s + tw * 4]);
-                }
-                let img = egui::ColorImage::from_rgba_premultiplied([tw, th], &data);
+                let img = texture_image(&pm, tx, ty, tw, th);
                 let rect = Rect::from_min_size(Pos2::new(tx as f32, ty as f32), Vec2::new(tw as f32, th as f32));
                 let tex = match reuse.next() {
                     Some(mut t) if t.rect == rect => {
@@ -1135,6 +1146,22 @@ impl EditorApp {
         }
         self.tiles = tiles;
     }
+}
+
+/// The `w` x `h` part of a premultiplied pixmap at `x`, `y` as an egui image, copied once
+/// (straight into the image's own pixels, without a copy in between).
+pub(crate) fn texture_image(pm: &tiny_skia::Pixmap, x: usize, y: usize, w: usize, h: usize) -> egui::ColorImage {
+    let stride = pm.width() as usize;
+    let mut pixels = Vec::with_capacity(w * h);
+    for row in y..y + h {
+        let start = (row * stride + x) * 4;
+        pixels.extend(
+            pm.data()[start..start + w * 4]
+                .chunks_exact(4)
+                .map(|p| egui::Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3])),
+        );
+    }
+    egui::ColorImage { size: [w, h], pixels }
 }
 
 impl eframe::App for EditorApp {

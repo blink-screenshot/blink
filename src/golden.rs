@@ -82,7 +82,22 @@ fn render_and_export_are_unchanged() {
         got.push(digest(r.export(&anns, Some(crop)).as_raw()));
         got.push(digest(render::crop_pixmap(&r.render(&anns, None), Some(crop)).data()));
         got.push(digest(render::crop_pixmap(&r.render(&anns, None), None).data()));
-        //OWNED
+        // Owned variants (no copies) must give the same pixels as the borrowed ones.
+        assert_eq!(Renderer::from_image(img.clone(), fonts.clone()).base().data(), r.base().data());
+        let pm = r.render(&anns, None);
+        assert_eq!(render::unpremultiply_owned(pm.clone()), render::unpremultiply(&pm));
+        let cropped = render::crop_pixmap_owned(pm.clone(), Some(crop));
+        assert_eq!(cropped.data(), render::crop_pixmap(&pm, Some(crop)).data());
+        assert_eq!(render::crop_pixmap_owned(pm.clone(), None).data(), pm.data());
+        // The editor's texture holds the same pixels as the pixmap, also cut into tiles.
+        let whole = crate::editor::texture_image(&pm, 0, 0, w as usize, h as usize);
+        assert_eq!(whole, eframe::egui::ColorImage::from_rgba_premultiplied([w as usize, h as usize], pm.data()));
+        let tile = crate::editor::texture_image(&pm, 100, 50, 64, 40);
+        let mut data = Vec::new();
+        for y in 50..90 {
+            data.extend_from_slice(&pm.data()[(y * w as usize + 100) * 4..][..64 * 4]);
+        }
+        assert_eq!(tile, eframe::egui::ColorImage::from_rgba_premultiplied([64, 40], &data));
     }
     let want = GOLDEN_RENDER;
     assert_eq!(got, want, "render output changed:\n{got:#?}");
@@ -288,9 +303,7 @@ fn timing() {
     });
     let pm = r.render(&small_blur, None);
     time("texture image from 4K pixmap", 10, &mut || {
-        let mut data = Vec::with_capacity(pm.data().len());
-        data.extend_from_slice(pm.data());
-        std::hint::black_box(eframe::egui::ColorImage::from_rgba_premultiplied([w as usize, h as usize], &data));
+        std::hint::black_box(crate::editor::texture_image(&pm, 0, 0, w as usize, h as usize));
     });
     let src = pixmap_from(&img);
     let s = FrameSettings { background_on: true, ..Default::default() };
@@ -312,7 +325,7 @@ fn timing() {
     });
     let gray_page = img.as_raw();
     time("QR search 4K (nothing found)", 3, &mut || {
-        std::hint::black_box(crate::qr::find_bgra(&gray_page.clone(), w as usize, h as usize));
+        std::hint::black_box(crate::qr::find_luma(&crate::qr::luma(&gray_page.clone()), w as usize, h as usize));
     });
 }
 

@@ -384,8 +384,8 @@ pub fn read_with(engine: &dyn Engine, bgra: &[u8], w: u32, h: u32) -> Result<Pag
     let img: &[u8] = if (sw, sh) == (w, h) {
         bgra
     } else {
-        // The channel order does not matter for resizing.
-        let src = image::RgbaImage::from_raw(w, h, bgra[..(w * h * 4) as usize].to_vec())
+        // The channel order does not matter for resizing. Read where it is, not copied.
+        let src = image::ImageBuffer::<image::Rgba<u8>, &[u8]>::from_raw(w, h, &bgra[..(w * h * 4) as usize])
             .ok_or_else(|| OcrError::Failed("image size".into()))?;
         let filter =
             if scale > 1.0 { image::imageops::FilterType::CatmullRom } else { image::imageops::FilterType::Triangle };

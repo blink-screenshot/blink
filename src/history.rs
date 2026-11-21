@@ -76,11 +76,30 @@ fn now_ms() -> u64 {
 
 /// Adds a screenshot and removes what is beyond the limits. Slow for big screenshots (PNG):
 /// call it off the UI thread.
-pub fn add(img: &RgbaImage, pointer: Option<&Pointer>, limits: Limits) -> Result<u64, String> {
-    add_in(&dir(), img, pointer, limits, now_ms())
+/// Adds a screenshot. `flat` is the screenshot with the pointer drawn in, when the caller has
+/// it already (it is only used for the thumbnail; made here otherwise).
+pub fn add(
+    img: &RgbaImage,
+    flat: Option<&RgbaImage>,
+    pointer: Option<&Pointer>,
+    limits: Limits,
+) -> Result<u64, String> {
+    add_with(&dir(), img, flat, pointer, limits, now_ms())
 }
 
+#[cfg(test)]
 pub fn add_in(dir: &Path, img: &RgbaImage, pointer: Option<&Pointer>, limits: Limits, now: u64) -> Result<u64, String> {
+    add_with(dir, img, None, pointer, limits, now)
+}
+
+fn add_with(
+    dir: &Path,
+    img: &RgbaImage,
+    flat: Option<&RgbaImage>,
+    pointer: Option<&Pointer>,
+    limits: Limits,
+    now: u64,
+) -> Result<u64, String> {
     if limits.keep == 0 {
         return Err("history is off".into());
     }
@@ -91,14 +110,16 @@ pub fn add_in(dir: &Path, img: &RgbaImage, pointer: Option<&Pointer>, limits: Li
     }
     let png = crate::config::ImageFormat::Png;
     imageio::save_image(&file(dir, id, ".png"), img, png, 100)?;
-    let mut flat = None;
+    let mut made = None;
     if let Some(p) = pointer {
         imageio::save_image(&file(dir, id, ".pointer.png"), &p.img, png, 100)?;
-        let mut f = img.clone();
-        imageio::flatten(&mut f, p);
-        flat = Some(f);
+        if flat.is_none() {
+            let mut f = img.clone();
+            imageio::flatten(&mut f, p);
+            made = Some(f);
+        }
     }
-    let thumb = fit(flat.as_ref().unwrap_or(img));
+    let thumb = fit(flat.or(made.as_ref()).unwrap_or(img));
     imageio::save_image(&file(dir, id, ".thumb.png"), &thumb, png, 100)?;
     let meta = Meta { width: img.width(), height: img.height(), pointer: pointer.map(|p| (p.x, p.y)) };
     let json = serde_json::to_string(&meta).map_err(|e| e.to_string())?;
@@ -155,7 +176,7 @@ pub fn load_in(dir: &Path, id: u64) -> Result<(RgbaImage, Option<Pointer>), Stri
 }
 
 pub fn thumbnail(id: u64) -> Option<RgbaImage> {
-    image::open(file(&dir(), id, ".thumb.png")).ok().map(|i| i.to_rgba8())
+    image::open(file(&dir(), id, ".thumb.png")).ok().map(|i| i.into_rgba8())
 }
 
 /// Removes the screenshots beyond the limits (the oldest beyond `keep`, and those older than
@@ -238,10 +259,16 @@ mod tests {
         assert_ne!(a, b);
         let (back, ptr) = load_in(&d, a).unwrap();
         assert_eq!(back, img);
-        assert_eq!(ptr, Some(p));
+        assert_eq!(ptr.as_ref(), Some(&p));
         // The preview shows the pointer.
         let thumb = image::open(file(&d, a, ".thumb.png")).unwrap().to_rgba8();
         assert_eq!(thumb.get_pixel(3, 4).0, [255, 0, 0, 255]);
+        // A flattened copy handed in gives the same preview, without making one here.
+        let mut flat = img.clone();
+        imageio::flatten(&mut flat, &p);
+        let c = add_with(&d, &img, Some(&flat), Some(&p), limits, 6).unwrap();
+        let same = image::open(file(&d, c, ".thumb.png")).unwrap().to_rgba8();
+        assert_eq!(same, thumb);
         assert!(add_in(&d, &img, None, Limits { keep: 0, ..limits }, 9).is_err());
         std::fs::remove_dir_all(&d).ok();
     }
