@@ -29,6 +29,8 @@ pub enum Icon {
     Save,
     /// A sparkle, for "See what's new".
     WhatsNew,
+    /// A clock, for History.
+    History,
 }
 
 fn rrect(pb: &mut PathBuilder, l: f32, t: f32, r: f32, b: f32, rad: f32) {
@@ -165,6 +167,13 @@ fn path(icon: Icon) -> Option<tiny_skia::Path> {
             line(&mut pb, &[(12.0, 2.5), (12.0, 11.5)]);
             arc(&mut pb, 12.0, 13.0, 8.5, -52.0, 232.0);
         }
+        Icon::History => {
+            // A clock whose rim runs back into an arrow (like Lucide's "history").
+            arc(&mut pb, 12.0, 12.0, 8.5, 180.0, -132.0);
+            pb.line_to(3.5, 8.5);
+            line(&mut pb, &[(3.5, 3.5), (3.5, 8.5), (8.5, 8.5)]);
+            line(&mut pb, &[(12.0, 7.5), (12.0, 12.0), (15.5, 14.0)]);
+        }
     }
     pb.finish()
 }
@@ -193,12 +202,48 @@ pub fn bitmap(icon: Icon, size: u32, color: Color32) -> HBITMAP {
         let stroke = Stroke { width: 1.9, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Default::default() };
         pm.stroke_path(&p, &paint, &stroke, Transform::from_scale(s, s), None);
     }
+    dib(&pm)
+}
+
+/// A screenshot preview for the History menu: fitted in a box of `w` x `h` pixels, centered,
+/// with a thin outline in `color` so light screenshots stand out on a light menu.
+pub fn thumbnail(img: &image::RgbaImage, w: u32, h: u32, color: Color32) -> HBITMAP {
+    let (w, h) = (w.max(8), h.max(8));
+    let Some(mut pm) = Pixmap::new(w, h) else { return std::ptr::null_mut() };
+    let s = ((w - 2) as f32 / img.width() as f32).min((h - 2) as f32 / img.height() as f32);
+    let tw = ((img.width() as f32 * s).round() as u32).clamp(1, w - 2);
+    let th = ((img.height() as f32 * s).round() as u32).clamp(1, h - 2);
+    let small = image::imageops::resize(img, tw, th, image::imageops::FilterType::Triangle);
+    let (ox, oy) = ((w - tw) / 2, (h - th) / 2);
+    let data = pm.data_mut();
+    for (x, y, p) in small.enumerate_pixels() {
+        let i = (((oy + y) * w + ox + x) * 4) as usize;
+        let a = p[3] as u32;
+        let pre = |c: u8| (c as u32 * a / 255) as u8;
+        data[i..i + 4].copy_from_slice(&[pre(p[0]), pre(p[1]), pre(p[2]), p[3]]);
+    }
+    let mut pb = PathBuilder::new();
+    pb.push_rect(
+        tiny_skia::Rect::from_xywh(ox as f32 - 0.5, oy as f32 - 0.5, tw as f32 + 1.0, th as f32 + 1.0).unwrap(),
+    );
+    if let Some(path) = pb.finish() {
+        let mut paint = Paint::default();
+        let [r, g, b, _] = color.to_srgba_unmultiplied();
+        paint.set_color_rgba8(r, g, b, 90);
+        pm.stroke_path(&path, &paint, &Stroke { width: 1.0, ..Default::default() }, Transform::identity(), None);
+    }
+    dib(&pm)
+}
+
+/// A premultiplied 32-bit bottom-up DIB (what menus expect) of a pixmap.
+fn dib(pm: &Pixmap) -> HBITMAP {
+    let (w, h) = (pm.width(), pm.height());
     unsafe {
         let mut bmi: BITMAPINFO = std::mem::zeroed();
         bmi.bmiHeader = BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: size as i32,
-            biHeight: size as i32, // bottom-up: what menus expect
+            biWidth: w as i32,
+            biHeight: h as i32, // bottom-up: what menus expect
             biPlanes: 1,
             biBitCount: 32,
             biCompression: BI_RGB,
@@ -211,10 +256,10 @@ pub fn bitmap(icon: Icon, size: u32, color: Color32) -> HBITMAP {
         if bmp.is_null() || bits.is_null() {
             return std::ptr::null_mut();
         }
-        let dst = std::slice::from_raw_parts_mut(bits as *mut u8, (size * size * 4) as usize);
-        let row = size as usize * 4;
+        let dst = std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
+        let row = w as usize * 4;
         for (y, src) in pm.data().chunks_exact(row).enumerate() {
-            let d = &mut dst[(size as usize - 1 - y) * row..][..row];
+            let d = &mut dst[(h as usize - 1 - y) * row..][..row];
             for (o, p) in d.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
                 o.copy_from_slice(&[p[2], p[1], p[0], p[3]]); // RGBA -> BGRA (premultiplied)
             }

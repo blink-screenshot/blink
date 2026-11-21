@@ -70,6 +70,8 @@ The repository is public, so the check needs no token or account. GitHub allows 
 | `src/stitch.rs` | stitching scroll frames (tested) |
 | `src/ocr.rs`, `src/platform/win/ocr.rs` | reading text: the Windows OCR engine, enlarging small text, reading tall images in bands, selecting words / lines / paragraphs (tested) |
 | `src/sensitive.rs` | finding private info in the read text for *Find private info* (tested) |
+| `src/qr.rs` | finding and reading QR codes on the frozen screen for the overlay (`rqrr`, tested) |
+| `src/history.rs` | the tray menu's History: the latest screenshots in `%LOCALAPPDATA%\Blink\history` (tested) |
 | `src/editor/textsel.rs` | the editor's text tool and *Find private info* |
 | `src/render.rs` | drawing annotations, blur/pixelate (tested) |
 | `src/frame.rs` | backgrounds, device mockups, shadow, composing the frame (tested) |
@@ -80,7 +82,7 @@ The repository is public, so the check needs no token or account. GitHub allows 
 | `src/theme.rs` | all colours of the app (contrast is tested) |
 | `src/settings_ui.rs` | settings window |
 | `src/welcome_ui.rs` | welcome window on first start |
-| `src/i18n.rs`, `src/i18n_nl.rs` | translations: English is the key, plus a Dutch table (a test checks every text is translated) |
+| `src/i18n.rs`, `src/i18n_*.rs` | translations: English is the key, plus tables for Dutch, German, French, Spanish and Portuguese (tests check every text is translated in every table) |
 | `src/emoji.rs`, `assets/emoji/` | emoji stamps (Twemoji, CC-BY 4.0), rendered with resvg |
 | `src/update.rs`, `src/update_ui.rs`, `src/changelog.rs` | updates via GitHub Releases, What's new |
 | `src/platform/win/http.rs` | HTTPS via WinHTTP (system proxy and certificates) |

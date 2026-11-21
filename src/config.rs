@@ -271,6 +271,12 @@ pub struct Config {
     pub confirm_escape_close: bool,
     /// Text labels under the editor's tool icons.
     pub show_tool_labels: bool,
+    /// How many screenshots the tray menu's History keeps (0 = off).
+    pub history_size: u32,
+    /// How long History keeps a screenshot, in hours (0 = no limit).
+    pub history_max_age_hours: u32,
+    /// Capture the mouse pointer too (a separate, movable object in the editor).
+    pub capture_pointer: bool,
 }
 
 impl Default for Config {
@@ -301,6 +307,9 @@ impl Default for Config {
             preview_quality: PreviewQuality::Balanced,
             confirm_escape_close: true,
             show_tool_labels: false,
+            history_size: 10,
+            history_max_age_hours: 24,
+            capture_pointer: false,
         }
     }
 }

@@ -491,6 +491,7 @@ impl Renderer {
                 let wrap = Some(text_wrap_width(ann, self.base.width() as f32));
                 draw_text_wrapped(pm, font, text, size, r.min + Vec2::splat(pad), callout_text_color(st), wrap);
             }
+            Kind::Pointer(img) => draw_image(pm, img, ann.rect()),
             Kind::Emoji(id) => {
                 let r = ann.rect();
                 let side = r.width().min(r.height());
@@ -860,11 +861,49 @@ fn box_blur_v(buf: &mut [[i32; 4]], w: usize, h: usize, r: usize) {
     }
 }
 
+/// Draws `img` (straight alpha) stretched over `r`.
+pub fn draw_image(pm: &mut Pixmap, img: &image::RgbaImage, r: Rect) {
+    if r.width() < 1.0 || r.height() < 1.0 || img.width() == 0 || img.height() == 0 {
+        return;
+    }
+    let Some(mut src) = Pixmap::new(img.width(), img.height()) else { return };
+    for (d, p) in src.pixels_mut().iter_mut().zip(img.pixels()) {
+        let [r, g, b, a] = p.0;
+        *d = tiny_skia::ColorU8::from_rgba(r, g, b, a).premultiply();
+    }
+    let (sx, sy) = (r.width() / img.width() as f32, r.height() / img.height() as f32);
+    // Pixel-exact at 100% (the usual case: the pointer as it was), smooth when resized.
+    let quality = if (sx - 1.0).abs() < 1e-3 && (sy - 1.0).abs() < 1e-3 {
+        tiny_skia::FilterQuality::Nearest
+    } else {
+        tiny_skia::FilterQuality::Bicubic
+    };
+    let paint = tiny_skia::PixmapPaint { quality, ..Default::default() };
+    pm.draw_pixmap(0, 0, src.as_ref(), &paint, Transform::from_row(sx, 0.0, 0.0, sy, r.min.x, r.min.y), None);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::annot::Style;
     use eframe::egui::pos2;
+
+    #[test]
+    fn pointer_image_is_drawn_where_it_belongs() {
+        // Left column transparent, right column red; at 100% and doubled.
+        let img = image::RgbaImage::from_fn(2, 2, |x, _| image::Rgba([255, 0, 0, if x == 0 { 0 } else { 255 }]));
+        let mut pm = Pixmap::new(10, 10).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        draw_image(&mut pm, &img, Rect::from_min_max(pos2(3.0, 4.0), pos2(5.0, 6.0)));
+        let px = |pm: &Pixmap, x: u32, y: u32| pm.pixel(x, y).map(|p| (p.red(), p.green(), p.blue()));
+        assert_eq!(px(&pm, 3, 4), Some((255, 255, 255)));
+        assert_eq!(px(&pm, 4, 4), Some((255, 0, 0)));
+        assert_eq!(px(&pm, 5, 4), Some((255, 255, 255)));
+        draw_image(&mut pm, &img, Rect::from_min_max(pos2(0.0, 0.0), pos2(-1.0, 3.0)));
+        let mut big = Pixmap::new(10, 10).unwrap();
+        draw_image(&mut big, &img, Rect::from_min_max(pos2(0.0, 0.0), pos2(4.0, 4.0)));
+        assert!(big.pixel(3, 2).unwrap().alpha() > 200 && big.pixel(0, 2).unwrap().alpha() < 60);
+    }
 
     fn checker(w: u32, h: u32) -> RgbaImage {
         RgbaImage::from_fn(w, h, |x, y| {

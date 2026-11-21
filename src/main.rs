@@ -8,11 +8,17 @@ mod config;
 mod editor;
 mod emoji;
 mod frame;
+mod history;
 mod i18n;
+mod i18n_de;
+mod i18n_es;
+mod i18n_fr;
 mod i18n_nl;
+mod i18n_pt;
 mod imageio;
 mod ocr;
 mod platform;
+mod qr;
 mod render;
 mod sensitive;
 mod settings_ui;
@@ -36,10 +42,10 @@ fn main() {
         Some("--edit-raw") => match arg(1) {
             Some(p) => {
                 let path = PathBuf::from(p);
-                let img = imageio::read_raw(&path).map_err(|e| e.to_string());
+                let shot = imageio::read_capture(&path).map_err(|e| e.to_string());
                 std::fs::remove_file(&path).ok();
                 let select_text = arg(2) == Some("--select-text");
-                img.and_then(|img| editor::run_with(img, None, select_text))
+                shot.and_then(|(img, pointer)| editor::run_with(img, pointer, None, select_text))
             }
             None => Err(i18n::t("Missing file path.").into()),
         },
@@ -69,7 +75,7 @@ fn main() {
             Some(p) => {
                 let raw = PathBuf::from(p);
                 let c = config::Config::load();
-                let result = match imageio::read_raw(&raw) {
+                let result = match imageio::read_capture_flat(&raw) {
                     Err(e) => Err(e.to_string()),
                     Ok(img) => match imageio::ask_save_path(&c) {
                         None => Ok(()),

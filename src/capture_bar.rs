@@ -842,7 +842,8 @@ mod tests {
     fn preview() {
         let Some(dir) = std::env::var_os("BLINK_BAR_PREVIEW") else { return };
         let fonts = test_fonts();
-        for (lang, name) in [(crate::i18n::Language::English, "en"), (crate::i18n::Language::Dutch, "nl")] {
+        for lang in crate::i18n::Language::ALL {
+            let name = format!("{lang:?}").to_lowercase();
             crate::i18n::set_language(lang);
             for (i, mode) in Mode::ALL.into_iter().enumerate() {
                 let hover = (mode == Mode::Region).then_some(Hit::Mode(Mode::Screen));

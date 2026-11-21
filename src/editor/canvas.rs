@@ -458,7 +458,7 @@ fn update_drag(app: &mut EditorApp, cur: Pos2, shift: bool) {
                 match &mut a.kind {
                     Kind::Freehand(pts) => push_point(pts, cur, 1.5),
                     // Stamps stay square.
-                    Kind::Emoji(_) => a.b = constrain(start, cur, false),
+                    Kind::Emoji(_) | Kind::Pointer(_) => a.b = constrain(start, cur, false),
                     Kind::Callout { tail, .. } => {
                         a.b = if shift { constrain(start, cur, false) } else { cur };
                         *tail = start;
@@ -498,7 +498,7 @@ fn update_drag(app: &mut EditorApp, cur: Pos2, shift: bool) {
                     a.b.y = a.a.y;
                     return;
                 }
-                let square = matches!(a.kind, Kind::Emoji(_));
+                let square = matches!(a.kind, Kind::Emoji(_) | Kind::Pointer(_));
                 match handle {
                     Handle::Tail => {
                         if let Kind::Callout { tail, .. } = &mut a.kind {
@@ -571,7 +571,7 @@ fn end_drag(app: &mut EditorApp) {
                     Kind::Freehand(p) => p.len() < 2,
                     Kind::Arrow | Kind::Line => (a.b - a.a).length() < 3.0,
                     // A tiny drag places a stamp / callout at its normal size.
-                    Kind::Emoji(_) | Kind::Callout { .. } => false,
+                    Kind::Emoji(_) | Kind::Pointer(_) | Kind::Callout { .. } => false,
                     _ => a.rect().width() < 3.0 || a.rect().height() < 3.0,
                 };
                 if small && matches!(a.kind, Kind::Emoji(_)) {
@@ -721,21 +721,36 @@ fn start_text_edit(app: &mut EditorApp, id: u64, created: bool) {
     app.invalidate();
 }
 
+/// Cursor for a handle: resize arrows for rect handles, a (closed) hand for point handles.
+fn handle_cursor(h: Handle, dragging: bool) -> CursorIcon {
+    match h {
+        Handle::Rect(0, _) => CursorIcon::ResizeVertical,
+        Handle::Rect(_, 0) => CursorIcon::ResizeHorizontal,
+        Handle::Rect(x, y) if x == y => CursorIcon::ResizeNwSe,
+        Handle::Rect(..) => CursorIcon::ResizeNeSw,
+        Handle::SegA | Handle::SegB | Handle::Tail => {
+            if dragging {
+                CursorIcon::Grabbing
+            } else {
+                CursorIcon::Grab
+            }
+        }
+    }
+}
+
 fn set_cursor(app: &EditorApp, ctx: &egui::Context, v: &View, pointer: Option<Pos2>, tool: Tool) {
     let Some(p) = pointer else { return };
     if app.space_down {
         ctx.set_cursor_icon(CursorIcon::Grab);
         return;
     }
+    // While a handle is being dragged the pointer may leave the handle radius: keep its cursor.
+    if let Drag::Handle { handle, .. } = app.drag {
+        ctx.set_cursor_icon(handle_cursor(handle, true));
+        return;
+    }
     if let Some((_, h)) = handle_at(app, v, p) {
-        ctx.set_cursor_icon(match h {
-            Handle::Rect(-1, -1) | Handle::Rect(1, 1) => CursorIcon::ResizeNwSe,
-            Handle::Rect(1, -1) | Handle::Rect(-1, 1) => CursorIcon::ResizeNeSw,
-            Handle::Rect(0, _) => CursorIcon::ResizeVertical,
-            Handle::Rect(_, 0) => CursorIcon::ResizeHorizontal,
-            Handle::Tail => CursorIcon::Move,
-            _ => CursorIcon::Crosshair,
-        });
+        ctx.set_cursor_icon(handle_cursor(h, false));
         return;
     }
     let icon = match tool {
@@ -903,6 +918,16 @@ fn paint_preview(p: &Painter, app: &EditorApp, a: &Annotation, v: &View) {
             let color = callout_text_color(st);
             let galley = p.layout_job(text_job(text, st, size, color, wrap));
             p.galley(v.to_screen(r.min + Vec2::splat(pad)), galley, color);
+        }
+        Kind::Pointer(img) => {
+            if let Some(tex) = app.pointer_tex_id(img) {
+                p.image(
+                    tex,
+                    v.rect_to_screen(a.rect()),
+                    Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
         }
         Kind::Emoji(id) => {
             if let Some(tex) = app.emoji_tex_id(id) {

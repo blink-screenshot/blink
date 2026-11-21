@@ -176,6 +176,7 @@ impl Tool {
             Kind::Shape(_) => Tool::Shape,
             Kind::Callout { .. } => Tool::Callout,
             Kind::Emoji(_) => Tool::Emoji,
+            Kind::Pointer(_) => Tool::Select,
         }
     }
 }
@@ -269,6 +270,8 @@ pub struct EditorApp {
     pub emoji: String,
     /// Emoji rasterized for the picker and the live preview.
     emoji_tex: HashMap<String, TextureHandle>,
+    /// The captured mouse pointer as a texture (for the live preview while dragging it).
+    pointer_tex: Option<(Arc<RgbaImage>, TextureHandle)>,
     pub selected: Option<u64>,
     drag: Drag,
     tiles: Vec<Tile>,
@@ -331,12 +334,18 @@ pub struct EditorApp {
 }
 
 pub fn run(img: RgbaImage, source: Option<PathBuf>) -> Result<(), String> {
-    run_with(img, source, false)
+    run_with(img, None, source, false)
 }
 
 /// `run`, starting with the text selection tool when `select_text` (the "text copied"
 /// notification opens the capture like that).
-pub fn run_with(img: RgbaImage, source: Option<PathBuf>, select_text: bool) -> Result<(), String> {
+/// `pointer`: the mouse pointer captured with the screenshot; it becomes a separate object.
+pub fn run_with(
+    img: RgbaImage,
+    pointer: Option<crate::imageio::Pointer>,
+    source: Option<PathBuf>,
+    select_text: bool,
+) -> Result<(), String> {
     if img.width() == 0 || img.height() == 0 {
         return Err(t("The image is empty.").into());
     }
@@ -384,6 +393,9 @@ pub fn run_with(img: RgbaImage, source: Option<PathBuf>, select_text: bool) -> R
             #[cfg(not(windows))]
             let _ = (phys, maximize, light);
             let mut app = EditorApp::new(cc, img);
+            if let Some(p) = pointer {
+                app.add_pointer(&cc.egui_ctx, p);
+            }
             if select_text {
                 app.tool = Tool::SelectText;
             }
@@ -444,6 +456,7 @@ impl EditorApp {
                 .filter(|e| crate::emoji::exists(e))
                 .unwrap_or_else(|| crate::emoji::DEFAULT.into()),
             emoji_tex: HashMap::new(),
+            pointer_tex: None,
             selected: None,
             drag: Drag::None,
             tiles: Vec::new(),
@@ -857,6 +870,28 @@ impl EditorApp {
     }
 
     /// A texture made earlier by `emoji_texture` (the canvas cannot create textures).
+    /// Adds the captured mouse pointer as an object (it is part of the screenshot, so not an
+    /// unsaved change).
+    fn add_pointer(&mut self, ctx: &egui::Context, p: crate::imageio::Pointer) {
+        let size = [p.img.width() as usize, p.img.height() as usize];
+        let tex = ctx.load_texture(
+            "pointer",
+            egui::ColorImage::from_rgba_unmultiplied(size, p.img.as_raw()),
+            egui::TextureOptions::LINEAR,
+        );
+        let img = Arc::new(p.img);
+        let a = Pos2::new(p.x as f32, p.y as f32);
+        let b = a + Vec2::new(img.width() as f32, img.height() as f32);
+        let id = self.new_id();
+        self.doc.anns.push(Annotation { id, kind: Kind::Pointer(img.clone()), a, b, style: Style::default() });
+        self.pointer_tex = Some((img, tex));
+        self.invalidate();
+    }
+
+    pub fn pointer_tex_id(&self, img: &Arc<RgbaImage>) -> Option<egui::TextureId> {
+        self.pointer_tex.as_ref().filter(|(i, _)| Arc::ptr_eq(i, img)).map(|(_, t)| t.id())
+    }
+
     pub fn emoji_tex_id(&self, id: &str) -> Option<egui::TextureId> {
         self.emoji_tex.get(id).map(|t| t.id())
     }
