@@ -259,7 +259,7 @@ pub fn image_from_clipboard() -> Result<RgbaImage, String> {
 }
 
 pub fn load_image_file(path: &Path) -> Result<RgbaImage, String> {
-    image::open(path).map(|i| i.to_rgba8()).map_err(|e| tf("Cannot open {1}: {0}", &[&e, &path.display()]))
+    image::open(path).map(|i| i.into_rgba8()).map_err(|e| tf("Cannot open {1}: {0}", &[&e, &path.display()]))
 }
 
 #[cfg(test)]

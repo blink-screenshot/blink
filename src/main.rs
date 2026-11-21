@@ -9,6 +9,8 @@ mod config;
 mod editor;
 mod emoji;
 mod frame;
+#[cfg(test)]
+mod golden;
 mod history;
 mod i18n;
 mod i18n_de;

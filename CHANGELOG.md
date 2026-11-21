@@ -2,6 +2,13 @@
 
 All notable changes to Blink, per version. Every version is on [GitHub](https://github.com/blink-screenshot/blink/releases) with its installer; the release notes are taken from this file.
 
+## [1.3.3] - 2026-11-21
+
+### Improvements
+
+- **Blink uses less memory**, most of all with large screenshots and on 4K screens: in the editor (also while you blur or pixelate a large area), in the settings and other windows, while the capture overlay is open and during a scrolling capture. Nothing looks different: every screenshot comes out pixel for pixel the same.
+- **Blurring a large area is faster** in the editor: about twice as fast when you blur most of a 4K screenshot.
+
 ## [1.3.2] - 2026-11-21
 
 ### Improvements

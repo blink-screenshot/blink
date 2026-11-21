@@ -163,15 +163,21 @@ impl Fonts {
         let dir = std::env::var_os("WINDIR")
             .map(|w| std::path::PathBuf::from(w).join("Fonts"))
             .unwrap_or_else(|| "C:\\Windows\\Fonts".into());
-        let read = |names: &[&str]| names.iter().find_map(|n| std::fs::read(dir.join(n)).ok());
-        let font = |b: Vec<u8>| FontArc::try_from_vec(b).ok();
+        // Mapped from the file rather than read into memory: these fonts stay loaded in the
+        // tray for good (they are read at start, so the first capture is as fast as the others),
+        // and a mapped file is not a private copy.
+        let font = |path: std::path::PathBuf| match crate::platform::map_file(&path) {
+            Some(bytes) => ab_glyph::FontRef::try_from_slice(bytes).ok().map(FontArc::from),
+            None => FontArc::try_from_vec(std::fs::read(&path).ok()?).ok(),
+        };
+        let read = |names: &[&str]| names.iter().find_map(|n| font(dir.join(n)));
         let fallback = || {
             let defs = eframe::egui::FontDefinitions::default();
             let fd = defs.font_data.values().next().expect("egui ships default fonts");
             FontArc::try_from_vec(fd.font.to_vec()).expect("egui's default font is valid")
         };
-        let regular = read(&["segoeui.ttf"]).and_then(font).unwrap_or_else(fallback);
-        let semibold = read(&["seguisb.ttf", "segoeuib.ttf"]).and_then(font).unwrap_or_else(|| regular.clone());
+        let regular = read(&["segoeui.ttf"]).unwrap_or_else(fallback);
+        let semibold = read(&["seguisb.ttf", "segoeuib.ttf"]).unwrap_or_else(|| regular.clone());
         Self { regular, semibold }
     }
 }

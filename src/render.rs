@@ -13,47 +13,69 @@ pub struct Fonts {
     pub bold: FontArc,
     pub italic: FontArc,
     pub bold_italic: FontArc,
-    pub regular_bytes: Arc<Vec<u8>>,
-    pub bold_bytes: Arc<Vec<u8>>,
-    pub italic_bytes: Arc<Vec<u8>>,
-    pub bold_italic_bytes: Arc<Vec<u8>>,
+    pub regular_bytes: &'static [u8],
+    pub bold_bytes: &'static [u8],
+    pub italic_bytes: &'static [u8],
+    pub bold_italic_bytes: &'static [u8],
     /// Semibold UI font (labels); same as bold when the system has none.
-    pub semibold_bytes: Arc<Vec<u8>>,
+    pub semibold_bytes: &'static [u8],
 }
 
 impl Fonts {
+    /// The fonts, read from disk once per process. Every font file is held once: the
+    /// renderer and egui (`FontData::from_static`) use the same bytes, where they used to keep
+    /// a copy each (four copies of every file in every window).
     pub fn load() -> Arc<Self> {
-        let from_disk = |names: &[&str]| -> Option<Vec<u8>> {
-            let dir = std::env::var_os("WINDIR")
-                .map(|w| std::path::PathBuf::from(w).join("Fonts"))
-                .unwrap_or_else(|| "C:\\Windows\\Fonts".into());
-            names.iter().find_map(|n| std::fs::read(dir.join(n)).ok())
+        static FONTS: std::sync::OnceLock<Arc<Fonts>> = std::sync::OnceLock::new();
+        FONTS.get_or_init(Self::read).clone()
+    }
+
+    fn read() -> Arc<Self> {
+        let dir = std::env::var_os("WINDIR")
+            .map(|w| std::path::PathBuf::from(w).join("Fonts"))
+            .unwrap_or_else(|| "C:\\Windows\\Fonts".into());
+        // Kept for the rest of the process (this runs once, see `load`): the fonts are used
+        // until the window closes, and `&'static` lets egui and ab_glyph borrow them.
+        let keep = |bytes: Vec<u8>| -> &'static [u8] { Box::leak(bytes.into_boxed_slice()) };
+        let mut read_files: Vec<(&str, &'static [u8])> = Vec::new();
+        let mut from_disk = |names: &[&'static str]| -> Option<&'static [u8]> {
+            names.iter().find_map(|&n| {
+                if let Some((_, b)) = read_files.iter().find(|(name, _)| *name == n) {
+                    return Some(*b);
+                }
+                let b = keep(std::fs::read(dir.join(n)).ok()?);
+                read_files.push((n, b));
+                Some(b)
+            })
         };
-        let fallback = || -> Vec<u8> {
+        let fallback = || -> &'static [u8] {
             let defs = egui::FontDefinitions::default();
             let fd = defs
                 .font_data
                 .get("Ubuntu-Light")
                 .or_else(|| defs.font_data.values().next())
                 .expect("egui ships default fonts");
-            fd.font.to_vec()
+            match &fd.font {
+                std::borrow::Cow::Borrowed(b) => b,
+                std::borrow::Cow::Owned(v) => keep(v.clone()),
+            }
         };
         let regular = from_disk(&["segoeui.ttf"]).unwrap_or_else(fallback);
-        let bold = from_disk(&["segoeuib.ttf", "seguisb.ttf"]).unwrap_or_else(|| regular.clone());
-        let italic = from_disk(&["segoeuii.ttf"]).unwrap_or_else(|| regular.clone());
-        let bold_italic = from_disk(&["segoeuiz.ttf"]).unwrap_or_else(|| bold.clone());
-        let semibold = from_disk(&["seguisb.ttf"]).unwrap_or_else(|| bold.clone());
-        let arc = |b: &Vec<u8>| FontArc::try_from_vec(b.clone()).expect("valid font");
+        let bold = from_disk(&["segoeuib.ttf", "seguisb.ttf"]).unwrap_or(regular);
+        let italic = from_disk(&["segoeuii.ttf"]).unwrap_or(regular);
+        let bold_italic = from_disk(&["segoeuiz.ttf"]).unwrap_or(bold);
+        let semibold = from_disk(&["seguisb.ttf"]).unwrap_or(bold);
+        let arc = |b: &'static [u8]| FontArc::from(ab_glyph::FontRef::try_from_slice(b).expect("valid font"));
         Arc::new(Self {
-            regular: arc(&regular),
-            bold: arc(&bold),
-            italic: arc(&italic),
-            bold_italic: arc(&bold_italic),
-            regular_bytes: Arc::new(regular),
-            bold_bytes: Arc::new(bold),
-            italic_bytes: Arc::new(italic),
-            bold_italic_bytes: Arc::new(bold_italic),
-            semibold_bytes: Arc::new(semibold),
+            regular: arc(regular),
+            bold: arc(bold),
+            italic: arc(italic),
+            bold_italic: arc(bold_italic),
+            regular_bytes: regular,
+            bold_bytes: bold,
+            italic_bytes: italic,
+            bold_italic_bytes: bold_italic,
+            semibold_bytes: semibold,
         })
     }
 
@@ -267,8 +289,8 @@ pub struct Renderer {
     pub fonts: Arc<Fonts>,
 }
 
-fn premultiply(img: &RgbaImage) -> Vec<u8> {
-    let mut data = img.as_raw().clone();
+/// Premultiplies in place (no copy of the image).
+fn premultiply(mut data: Vec<u8>) -> Vec<u8> {
     for p in data.chunks_exact_mut(4) {
         let a = p[3] as u32;
         if a != 255 {
@@ -281,9 +303,19 @@ fn premultiply(img: &RgbaImage) -> Vec<u8> {
 }
 
 impl Renderer {
+    #[cfg(test)]
     pub fn new(img: &RgbaImage, fonts: Arc<Fonts>) -> Self {
-        let size = tiny_skia::IntSize::from_wh(img.width().max(1), img.height().max(1)).unwrap();
-        let base = Pixmap::from_vec(premultiply(img), size).expect("pixmap");
+        Self::from_image(img.clone(), fonts)
+    }
+
+    /// Like `new`, but takes the image and premultiplies it where it is, so a big screenshot
+    /// is not held twice while the editor starts.
+    pub fn from_image(img: RgbaImage, fonts: Arc<Fonts>) -> Self {
+        let (w, h) = (img.width(), img.height());
+        let base = match tiny_skia::IntSize::from_wh(w, h) {
+            Some(size) => Pixmap::from_vec(premultiply(img.into_raw()), size).expect("pixmap"),
+            None => Pixmap::new(1, 1).expect("pixmap"),
+        };
         Self { base, fonts }
     }
 
@@ -312,7 +344,7 @@ impl Renderer {
 
     /// Final image: rendered, cropped and un-premultiplied.
     pub fn export(&self, anns: &[Annotation], crop: Option<Rect>) -> RgbaImage {
-        unpremultiply(&crop_pixmap(&self.render(anns, None), crop))
+        unpremultiply_owned(crop_pixmap_owned(self.render(anns, None), crop))
     }
 
     fn draw(&self, pm: &mut Pixmap, ann: &Annotation) {
@@ -649,10 +681,26 @@ pub fn crop_pixmap(pm: &Pixmap, crop: Option<Rect>) -> Pixmap {
         .unwrap_or_else(|| pm.clone())
 }
 
+/// Like `crop_pixmap`, but takes the pixmap: without a crop it is returned as it is, not
+/// copied.
+pub fn crop_pixmap_owned(pm: Pixmap, crop: Option<Rect>) -> Pixmap {
+    if crop_bounds(crop, pm.width(), pm.height()) == (0, 0, pm.width(), pm.height()) {
+        return pm;
+    }
+    crop_pixmap(&pm, crop)
+}
+
 /// Premultiplied pixmap -> straight-alpha image.
+#[cfg(test)]
 pub fn unpremultiply(pm: &Pixmap) -> RgbaImage {
-    let mut out = RgbaImage::from_raw(pm.width(), pm.height(), pm.data().to_vec()).expect("pixmap size");
-    for p in out.as_mut().chunks_exact_mut(4) {
+    unpremultiply_owned(pm.clone())
+}
+
+/// Like `unpremultiply`, but converts the pixels where they are (no copy of the image).
+pub fn unpremultiply_owned(pm: Pixmap) -> RgbaImage {
+    let (w, h) = (pm.width(), pm.height());
+    let mut data = pm.take();
+    for p in data.chunks_exact_mut(4) {
         let a = p[3] as u32;
         if a != 255 && a != 0 {
             for c in &mut p[..3] {
@@ -660,7 +708,7 @@ pub fn unpremultiply(pm: &Pixmap) -> RgbaImage {
             }
         }
     }
-    out
+    RgbaImage::from_raw(w, h, data).expect("pixmap size")
 }
 
 /// Integer (x, y, w, h) of `r` clamped to the image; whole image for `None`.
@@ -730,28 +778,23 @@ pub fn redact(
         RedactMode::Blur => {
             let radius = (2 + strength * 2).max(min_dim * strength / 25).max(4);
             pixelate(data, w, h, (radius / 2).max(2), &idx, None);
-            let mut buf: Vec<[i32; 4]> = Vec::with_capacity(w * h);
-            for y in 0..h {
-                for x in 0..w {
-                    let i = idx(x, y);
-                    buf.push([data[i] as i32, data[i + 1] as i32, data[i + 2] as i32, data[i + 3] as i32]);
-                }
-            }
+            // Blurred where it is: every intermediate value is an average of bytes, so it
+            // fits a byte again, and no copy of the region is needed (a 4K region would
+            // otherwise take 16 bytes per pixel).
+            let area = Area { stride: stride_px, x0, y0, w, h };
             for _ in 0..3 {
-                box_blur_h(&mut buf, w, h, radius);
-                box_blur_v(&mut buf, w, h, radius);
+                box_blur_h(data, area, radius);
+                box_blur_v(data, area, radius);
             }
             let amp = (3 + strength) as i32;
             for y in 0..h {
                 for x in 0..w {
-                    let p = buf[y * w + x];
                     let n = rng.noise(amp);
                     let i = idx(x, y);
-                    let a = p[3].clamp(0, 255);
+                    let a = data[i + 3] as i32;
                     for c in 0..3 {
-                        data[i + c] = (p[c] + n).clamp(0, a) as u8;
+                        data[i + c] = (data[i + c] as i32 + n).clamp(0, a) as u8;
                     }
-                    data[i + 3] = a as u8;
                 }
             }
         }
@@ -806,57 +849,90 @@ fn pixelate(
     }
 }
 
-fn box_blur_h(buf: &mut [[i32; 4]], w: usize, h: usize, r: usize) {
-    let mut line = vec![[0i32; 4]; w];
+/// The part of an RGBA buffer that is blurred: `w` x `h` pixels at `x0`, `y0`, in rows of
+/// `stride` pixels.
+#[derive(Clone, Copy)]
+struct Area {
+    stride: usize,
+    x0: usize,
+    y0: usize,
+    w: usize,
+    h: usize,
+}
+
+/// Box blur along the rows of `area`, where it is (one row is copied at a time).
+fn box_blur_h(data: &mut [u8], area: Area, r: usize) {
+    let Area { stride, x0, y0, w, h } = area;
+    if w == 0 {
+        return;
+    }
     let win = (2 * r + 1) as i32;
+    let mut row = vec![0u8; w * 4];
     for y in 0..h {
-        let row = &buf[y * w..(y + 1) * w];
-        let at = |x: isize| row[x.clamp(0, w as isize - 1) as usize];
+        let start = ((y0 + y) * stride + x0) * 4;
+        row.copy_from_slice(&data[start..start + w * 4]);
+        let at = |x: isize| x.clamp(0, w as isize - 1) as usize * 4;
         let mut acc = [0i32; 4];
         for k in -(r as isize)..=(r as isize) {
             let p = at(k);
             for c in 0..4 {
-                acc[c] += p[c];
+                acc[c] += row[p + c] as i32;
             }
         }
+        let out = &mut data[start..start + w * 4];
         for x in 0..w {
             for c in 0..4 {
-                line[x][c] = acc[c] / win;
+                out[x * 4 + c] = (acc[c] / win) as u8;
             }
-            let add = at(x as isize + r as isize + 1);
-            let sub = at(x as isize - r as isize);
+            let (add, sub) = (at(x as isize + r as isize + 1), at(x as isize - r as isize));
             for c in 0..4 {
-                acc[c] += add[c] - sub[c];
+                acc[c] += row[add + c] as i32 - row[sub + c] as i32;
             }
         }
-        buf[y * w..(y + 1) * w].copy_from_slice(&line);
     }
 }
 
-fn box_blur_v(buf: &mut [[i32; 4]], w: usize, h: usize, r: usize) {
-    let mut col = vec![[0i32; 4]; h];
+/// Box blur along the columns of `area`, where it is. Columns are done in strips of
+/// `STRIP` side by side, so the copy is read row by row (fast) instead of one pixel per row.
+fn box_blur_v(data: &mut [u8], area: Area, r: usize) {
+    const STRIP: usize = 16;
+    let Area { stride, x0, y0, w, h } = area;
+    if h == 0 {
+        return;
+    }
     let win = (2 * r + 1) as i32;
-    for x in 0..w {
-        let at = |y: isize| buf[y.clamp(0, h as isize - 1) as usize * w + x];
-        let mut acc = [0i32; 4];
+    let mut strip = vec![0u8; h * STRIP * 4];
+    for sx in (0..w).step_by(STRIP) {
+        let sw = STRIP.min(w - sx);
+        let line = sw * 4;
+        for y in 0..h {
+            let start = ((y0 + y) * stride + x0 + sx) * 4;
+            strip[y * line..(y + 1) * line].copy_from_slice(&data[start..start + line]);
+        }
+        let at = |y: isize| y.clamp(0, h as isize - 1) as usize * line;
+        let mut acc = [[0i32; 4]; STRIP];
         for k in -(r as isize)..=(r as isize) {
             let p = at(k);
-            for c in 0..4 {
-                acc[c] += p[c];
+            for (j, a) in acc.iter_mut().enumerate().take(sw) {
+                for c in 0..4 {
+                    a[c] += strip[p + j * 4 + c] as i32;
+                }
             }
         }
         for y in 0..h {
-            for c in 0..4 {
-                col[y][c] = acc[c] / win;
+            let start = ((y0 + y) * stride + x0 + sx) * 4;
+            let out = &mut data[start..start + line];
+            for (j, a) in acc.iter().enumerate().take(sw) {
+                for c in 0..4 {
+                    out[j * 4 + c] = (a[c] / win) as u8;
+                }
             }
-            let add = at(y as isize + r as isize + 1);
-            let sub = at(y as isize - r as isize);
-            for c in 0..4 {
-                acc[c] += add[c] - sub[c];
+            let (add, sub) = (at(y as isize + r as isize + 1), at(y as isize - r as isize));
+            for (j, a) in acc.iter_mut().enumerate().take(sw) {
+                for c in 0..4 {
+                    a[c] += strip[add + j * 4 + c] as i32 - strip[sub + j * 4 + c] as i32;
+                }
             }
-        }
-        for y in 0..h {
-            buf[y * w + x] = col[y];
         }
     }
 }

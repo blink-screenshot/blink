@@ -27,32 +27,7 @@ struct Frame {
 
 impl Frame {
     fn new(img: RgbaImage) -> Self {
-        let w = img.width() as usize;
-        // Ignore the right edge: the scrollbar thumb moves on every step.
-        let margin = (w / 8).min(24);
-        let used = (w - margin).max(1);
-        let seg = SEGMENTS.min(used);
-        let h = img.height() as usize;
-        let mut sig = vec![0u8; h * SEGMENTS];
-        let mut informative = Vec::with_capacity(h);
-        for (y, row) in img.as_raw().chunks_exact(w * 4).enumerate() {
-            let out = &mut sig[y * SEGMENTS..(y + 1) * SEGMENTS];
-            for (k, o) in out.iter_mut().enumerate().take(seg) {
-                let (x0, x1) = (k * used / seg, ((k + 1) * used / seg).max(k * used / seg + 1));
-                let mut sum = 0u32;
-                for p in row[x0 * 4..x1 * 4].chunks_exact(4) {
-                    sum += p[0] as u32 + p[1] as u32 + p[2] as u32;
-                }
-                *o = (sum / (3 * (x1 - x0) as u32)) as u8;
-            }
-            let (lo, hi) = out[..seg].iter().fold((255u8, 0u8), |(lo, hi), &v| (lo.min(v), hi.max(v)));
-            // A row with fine detail (thin text) can still average out flat: check pixels too.
-            let first = &row[..4];
-            let pixel_detail = row[..used * 4]
-                .chunks_exact(4)
-                .any(|p| p.iter().zip(first).take(3).any(|(a, b)| a.abs_diff(*b) > DETAIL * 3));
-            informative.push(hi - lo > DETAIL || pixel_detail);
-        }
+        let (sig, informative) = signature(&img);
         Self { img, sig, informative }
     }
     fn h(&self) -> usize {
@@ -61,6 +36,37 @@ impl Frame {
     fn row(&self, i: usize) -> &[u8] {
         &self.sig[i * SEGMENTS..(i + 1) * SEGMENTS]
     }
+}
+
+/// `SEGMENTS` brightness values per row, and per row whether it has detail.
+fn signature(img: &RgbaImage) -> (Vec<u8>, Vec<bool>) {
+    let w = img.width() as usize;
+    // Ignore the right edge: the scrollbar thumb moves on every step.
+    let margin = (w / 8).min(24);
+    let used = (w - margin).max(1);
+    let seg = SEGMENTS.min(used);
+    let h = img.height() as usize;
+    let mut sig = vec![0u8; h * SEGMENTS];
+    let mut informative = Vec::with_capacity(h);
+    for (y, row) in img.as_raw().chunks_exact(w * 4).enumerate() {
+        let out = &mut sig[y * SEGMENTS..(y + 1) * SEGMENTS];
+        for (k, o) in out.iter_mut().enumerate().take(seg) {
+            let (x0, x1) = (k * used / seg, ((k + 1) * used / seg).max(k * used / seg + 1));
+            let mut sum = 0u32;
+            for p in row[x0 * 4..x1 * 4].chunks_exact(4) {
+                sum += p[0] as u32 + p[1] as u32 + p[2] as u32;
+            }
+            *o = (sum / (3 * (x1 - x0) as u32)) as u8;
+        }
+        let (lo, hi) = out[..seg].iter().fold((255u8, 0u8), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+        // A row with fine detail (thin text) can still average out flat: check pixels too.
+        let first = &row[..4];
+        let pixel_detail = row[..used * 4]
+            .chunks_exact(4)
+            .any(|p| p.iter().zip(first).take(3).any(|(a, b)| a.abs_diff(*b) > DETAIL * 3));
+        informative.push(hi - lo > DETAIL || pixel_detail);
+    }
+    (sig, informative)
 }
 
 fn row_distance(a: &[u8], b: &[u8]) -> u32 {
@@ -76,9 +82,12 @@ pub fn nearly_equal(a: &RgbaImage, b: &RgbaImage) -> bool {
     if a.dimensions() != b.dimensions() {
         return false;
     }
-    let (fa, fb) = (Frame::new(a.clone()), Frame::new(b.clone()));
-    let differ = (0..fa.h()).filter(|&i| row_distance(fa.row(i), fb.row(i)) > 1).count();
-    differ * 100 <= fa.h()
+    // Only the row signatures are compared: no copies of the two images.
+    let ((sa, _), (sb, _)) = (signature(a), signature(b));
+    let h = a.height() as usize;
+    let row = |i: usize| i * SEGMENTS..(i + 1) * SEGMENTS;
+    let differ = (0..h).filter(|&i| row_distance(&sa[row(i)], &sb[row(i)]) > 1).count();
+    differ * 100 <= h
 }
 
 #[derive(Debug, PartialEq, Eq)]
