@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code signing policy | Blink</title>
+<meta name="description" content="How Blink's Windows releases are built, approved and code-signed, who is responsible, and what Blink does and does not send over the network.">
+<meta name="theme-color" content="#101114">
+<link rel="icon" href="favicon.ico">
+<style>
+  :root {
+    --ink: #101114;
+    --canvas: #0a0b0d;
+    --panel: #17181c;
+    --border: #2e3138;
+    --text: #eaecf0;
+    --muted: #a3a7b1;
+    --accent: #ff2e93;
+    --accent-soft: #ffb3d9;
+    --maxw: 760px;
+    --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Inter", Roboto, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:hover { color: var(--accent-soft); }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+  .wrap { width: min(var(--maxw), 100% - 32px); margin-inline: auto; }
+  header.site { border-bottom: 1px solid var(--border); }
+  header.site .wrap { display: flex; align-items: center; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-weight: 750; font-size: 1.15rem; }
+  .brand img { width: 30px; height: 30px; }
+  main { padding: clamp(40px, 7vw, 80px) 0; }
+  .eyebrow { font-family: var(--mono); font-size: .78rem; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 0; }
+  h1 { font-size: clamp(2rem, 5vw, 2.8rem); line-height: 1.12; letter-spacing: -0.02em; margin: 12px 0 20px; }
+  h2 { font-size: 1.35rem; letter-spacing: -0.01em; margin: 44px 0 12px; }
+  p, ul { margin: 0 0 14px; }
+  ul { padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .muted { color: var(--muted); }
+  code { font-family: var(--mono); font-size: .9em; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; }
+  .attribution { background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 10px; padding: 16px 20px; margin: 24px 0; font-weight: 600; }
+  .status { border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: .92rem; }
+  footer.site { border-top: 1px solid var(--border); padding: 28px 0 48px; color: var(--muted); font-size: .92rem; }
+  footer.site a { color: var(--muted); }
+  footer.site a:hover { color: var(--text); }
+</style>
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <img src="img/logo.svg" width="30" height="30" alt="">
+      Blink
+    </a>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+    <p class="eyebrow">Code signing policy</p>
+    <h1>How Blink releases are signed</h1>
+    <p>Blink's Windows releases are code-signed so Windows can show who published them and that the files were not changed after the build.</p>
+
+    <p class="attribution">Free code signing provided by <a href="https://about.signpath.io/">SignPath.io</a>, certificate by <a href="https://signpath.org/">SignPath Foundation</a>.</p>
+
+    <p class="status"><strong>Status:</strong> Blink has applied for code signing through the SignPath Foundation. Until the first signed release is out, the installer is not signed and Windows SmartScreen warns about it. This page will say which version is the first signed one.</p>
+
+    <h2>What is signed</h2>
+    <p>Only files built from Blink's own source code in the public repository <a href="https://github.com/blink-screenshot/blink">blink-screenshot/blink</a>:</p>
+    <ul>
+      <li><code>Blink-Setup.exe</code>, the installer</li>
+      <li><code>Blink.exe</code>, the app inside the installer, and the same file published as <code>Blink-portable.exe</code></li>
+      <li><code>Uninstall.exe</code>, the uninstaller the installer writes</li>
+    </ul>
+    <p>Each signed file carries the product name <i>Blink</i> and the version of that release in its file properties. Software from other projects is never signed under Blink's name.</p>
+
+    <h2>How a release is built</h2>
+    <ul>
+      <li>Every release is built and tested by <a href="https://github.com/blink-screenshot/blink/actions/workflows/build.yml">GitHub Actions</a> from the public source code. Nothing is built or signed on a personal computer.</li>
+      <li>A new version is first published as a <b>pre-release</b>, which the in-app updater does not offer. The maintainer installs and tests it before promoting it to a regular release.</li>
+      <li>Every signing request is approved by hand by an approver (see below). Nothing is signed automatically.</li>
+      <li>The release page lists the SHA-256 checksum of every file, and the in-app updater checks that checksum before it installs an update.</li>
+    </ul>
+
+    <h2>Team roles</h2>
+    <table>
+      <thead>
+        <tr><th scope="col">Role</th><th scope="col">Who</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Committers and reviewers</td>
+          <td><a href="https://github.com/orgs/blink-screenshot/people">Members of the blink-screenshot organization</a>. Changes from anyone else arrive as a pull request and are reviewed by a member before they are merged.</td>
+        </tr>
+        <tr>
+          <td>Approvers</td>
+          <td><a href="https://github.com/orgs/blink-screenshot/people">Owners of the blink-screenshot organization</a>.</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>Everyone with one of these roles uses multi-factor authentication for GitHub and for SignPath.</p>
+
+    <h2>Privacy</h2>
+    <p>Blink collects no personal data, has no account, no analytics and no telemetry, and never uploads screenshots. It makes one kind of network request on its own: a daily check with the GitHub API for a newer version, which contains no personal data and can be turned off in <i>Settings &gt; Updates</i>. Text recognition uses the OCR engine built into Windows and works offline.</p>
+    <p>The full details, including the GitHub privacy statement that applies to the update check and to downloads, are in Blink's <a href="https://github.com/blink-screenshot/blink/blob/main/PRIVACY.md">privacy policy</a>.</p>
+
+    <h2>System changes</h2>
+    <p>The installer installs Blink per user in <code>%LOCALAPPDATA%\Programs\Blink</code>, without admin rights, and by default starts Blink with Windows, which can be turned off in the settings. Blink can be removed with its uninstaller, from <i>Settings &gt; Apps</i> in Windows.</p>
+
+    <h2>Reporting a problem</h2>
+    <p>If you think a signed file did not come from this project, or something about a release looks wrong, please report it as described in the <a href="https://github.com/blink-screenshot/blink/blob/main/SECURITY.md">security policy</a>.</p>
+  </div>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    Blink is free software under the <a href="https://github.com/blink-screenshot/blink/blob/main/LICENSE">GPL-3.0</a>. <a href="./">Back to the Blink homepage</a>.
+  </div>
+</footer>
+</body>
+</html>
