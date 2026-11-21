@@ -5,6 +5,7 @@
 //! code draws the clip window's preview and the export, so what you see is what you get.
 
 use super::events::{Button, Frame};
+use super::yuv::Nv12;
 use crate::capture_bar::{draw_text, fill, rrect, text_width, Area, Fonts};
 use crate::theme;
 use eframe::egui::Color32;
@@ -162,16 +163,80 @@ fn key_pill(text: &str, em: f32, fonts: &Fonts) -> Option<Pixmap> {
     Some(pix)
 }
 
+/// A key label laid out on the frame: its picture, opacity and top-left corner.
+type Pill = (Pixmap, f32, i32, i32);
+
+/// The key labels of `f`, centered at the bottom of a frame of `w` x `h`.
+fn key_pills(f: &Frame, w: u32, h: u32, s: f32, fonts: &Fonts) -> Vec<Pill> {
+    if f.keys.is_empty() {
+        return Vec::new();
+    }
+    // Smaller on a small video, so a few keys still fit.
+    let mut em = 19.0 * s;
+    let gap = 8.0 * s;
+    let width = |pills: &[(Pixmap, f32)]| {
+        pills.iter().map(|(p, _)| p.width() as f32).sum::<f32>() + gap * pills.len().saturating_sub(1) as f32
+    };
+    let mut pills = loop {
+        let pills: Vec<_> =
+            f.keys.iter().filter_map(|k| key_pill(&k.label, em, fonts).map(|p| (p, k.alpha()))).collect();
+        if width(&pills) <= w as f32 * 0.9 || em < 9.0 {
+            break pills;
+        }
+        em *= 0.8;
+    };
+    // Still too wide at the smallest size: the oldest labels go first.
+    while pills.len() > 1 && width(&pills) > w as f32 * 0.9 {
+        pills.remove(0);
+    }
+    let total = width(&pills);
+    let mut x = (w as f32 - total) / 2.0;
+    let mut out = Vec::new();
+    for (pix, alpha) in pills {
+        let y = h as f32 - pix.height() as f32 - 28.0 * s.min(h as f32 / 400.0).max(0.4);
+        let (px, py) = (x.round() as i32, y.round() as i32);
+        x += pix.width() as f32 + gap;
+        out.push((pix, alpha, px, py));
+    }
+    out
+}
+
 /// Draws `f` over `frame` (opaque RGBA, the size of the video).
+#[cfg(test)]
 pub fn draw(frame: &mut RgbaImage, f: &Frame, cursors: &Cursors, opts: &Overlays, style: &Style, fonts: &Fonts) {
+    let full = frame.dimensions();
     let s = style.dpi.clamp(0.5, 4.0);
-    let (w, h) = (frame.width(), frame.height());
+    let pills = if opts.keys { key_pills(f, full.0, full.1, s, fonts) } else { Vec::new() };
+    paint(frame, (0, 0), f, cursors, opts, style, &pills);
+}
+
+/// Draws everything of `f` that falls inside `img`, a part of the frame whose top-left is at
+/// `origin` in the frame. `pills` are the key labels, laid out on the whole frame.
+#[allow(clippy::too_many_arguments)]
+fn paint(
+    img: &mut RgbaImage,
+    origin: (i32, i32),
+    f: &Frame,
+    cursors: &Cursors,
+    opts: &Overlays,
+    style: &Style,
+    pills: &[Pill],
+) {
+    let s = style.dpi.clamp(0.5, 4.0);
+    let (ox, oy) = (origin.0 as f32, origin.1 as f32);
+    let (w, h) = img.dimensions();
     {
-        let Some(mut pix) = PixmapMut::from_bytes(frame.as_mut(), w, h) else { return };
+        let Some(mut pix) = PixmapMut::from_bytes(img.as_mut(), w, h) else { return };
         // The frame is opaque, so its straight RGBA is also valid premultiplied RGBA.
         if let (true, Some(p)) = (opts.pointer_highlight, f.pointer) {
-            let (x, y) = (p.x as f32, p.y as f32);
-            circle(&mut pix, x, y, 24.0 * s, Some(color(theme::hex::REC_HIGHLIGHT, 0.38)), None);
+            circle(
+                &mut pix,
+                p.x as f32 - ox,
+                p.y as f32 - oy,
+                24.0 * s,
+                Some(color(theme::hex::REC_HIGHLIGHT, 0.38)),
+                None,
+            );
         }
         if opts.clicks {
             for c in &f.clicks {
@@ -186,8 +251,8 @@ pub fn draw(frame: &mut RgbaImage, f: &Frame, cursors: &Cursors, opts: &Overlays
                 let fade = 1.0 - k;
                 circle(
                     &mut pix,
-                    c.x as f32,
-                    c.y as f32,
+                    c.x as f32 - ox,
+                    c.y as f32 - oy,
                     r,
                     Some(color(hex, 0.28 * fade)),
                     Some((color(hex, 0.95 * fade), 3.0 * s)),
@@ -196,39 +261,93 @@ pub fn draw(frame: &mut RgbaImage, f: &Frame, cursors: &Cursors, opts: &Overlays
         }
     }
     if let (true, Some(p)) = (opts.pointer, f.pointer) {
-        if let Some(img) = cursors.0.get(&p.id) {
+        if let Some(cur) = cursors.0.get(&p.id) {
             let z = style.zoom;
-            let x = (p.x as f32 - p.hx as f32 * z).round() as i32;
-            let y = (p.y as f32 - p.hy as f32 * z).round() as i32;
-            blend_image(frame, img, x, y, z);
+            let x = (p.x as f32 - p.hx as f32 * z).round() as i32 - origin.0;
+            let y = (p.y as f32 - p.hy as f32 * z).round() as i32 - origin.1;
+            blend_image(img, cur, x, y, z);
         }
     }
-    if opts.keys && !f.keys.is_empty() {
-        // Smaller on a small video, so a few keys still fit.
-        let mut em = 19.0 * s;
-        let gap = 8.0 * s;
-        let width = |pills: &[(Pixmap, f32)]| {
-            pills.iter().map(|(p, _)| p.width() as f32).sum::<f32>() + gap * pills.len().saturating_sub(1) as f32
-        };
-        let mut pills = loop {
-            let pills: Vec<_> =
-                f.keys.iter().filter_map(|k| key_pill(&k.label, em, fonts).map(|p| (p, k.alpha()))).collect();
-            if width(&pills) <= w as f32 * 0.9 || em < 9.0 {
-                break pills;
+    for (pix, alpha, x, y) in pills {
+        blend_pixmap(img, pix, x - origin.0, y - origin.1, *alpha);
+    }
+}
+
+/// A rectangle (x, y, w, h) in frame pixels.
+type Rect = (i32, i32, i32, i32);
+
+/// The areas of the frame the overlays of `f` cover, made even (for NV12), kept inside the
+/// frame, and merged where they touch, so nothing is drawn twice.
+fn areas(f: &Frame, cursors: &Cursors, opts: &Overlays, style: &Style, pills: &[Pill], w: u32, h: u32) -> Vec<Rect> {
+    let s = style.dpi.clamp(0.5, 4.0);
+    let mut rects: Vec<Rect> = Vec::new();
+    let around = |x: i32, y: i32, r: f32| {
+        let r = r.ceil() as i32 + 2;
+        (x - r, y - r, 2 * r, 2 * r)
+    };
+    if let (true, Some(p)) = (opts.pointer_highlight, f.pointer) {
+        rects.push(around(p.x, p.y, 24.0 * s));
+    }
+    if opts.clicks {
+        for c in &f.clicks {
+            rects.push(around(c.x, c.y, 33.0 * s));
+        }
+    }
+    if let (true, Some(p)) = (opts.pointer, f.pointer) {
+        if let Some(cur) = cursors.0.get(&p.id) {
+            let z = style.zoom;
+            let x = (p.x as f32 - p.hx as f32 * z).floor() as i32 - 1;
+            let y = (p.y as f32 - p.hy as f32 * z).floor() as i32 - 1;
+            rects.push((x, y, (cur.width() as f32 * z).ceil() as i32 + 3, (cur.height() as f32 * z).ceil() as i32 + 3));
+        }
+    }
+    for (pix, _, x, y) in pills {
+        rects.push((*x, *y, pix.width() as i32, pix.height() as i32));
+    }
+    // Even edges, inside the frame.
+    let (fw, fh) = (w as i32, h as i32);
+    let mut rects: Vec<Rect> = rects
+        .into_iter()
+        .filter_map(|(x, y, rw, rh)| {
+            let (l, t) = ((x.max(0)) & !1, (y.max(0)) & !1);
+            let (r, b) = (((x + rw).min(fw) + 1) & !1, ((y + rh).min(fh) + 1) & !1);
+            let (r, b) = (r.min(fw), b.min(fh));
+            (r > l && b > t).then_some((l, t, r - l, b - t))
+        })
+        .collect();
+    // Merge overlapping areas until none overlap.
+    let overlap = |a: &Rect, b: &Rect| a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3;
+    loop {
+        let mut merged = false;
+        'outer: for i in 0..rects.len() {
+            for j in i + 1..rects.len() {
+                if overlap(&rects[i], &rects[j]) {
+                    let (a, b) = (rects[i], rects[j]);
+                    let (l, t) = (a.0.min(b.0), a.1.min(b.1));
+                    let (r, bt) = ((a.0 + a.2).max(b.0 + b.2), (a.1 + a.3).max(b.1 + b.3));
+                    rects[i] = (l, t, r - l, bt - t);
+                    rects.swap_remove(j);
+                    merged = true;
+                    break 'outer;
+                }
             }
-            em *= 0.8;
-        };
-        // Still too wide at the smallest size: the oldest labels go first.
-        while pills.len() > 1 && width(&pills) > w as f32 * 0.9 {
-            pills.remove(0);
         }
-        let total = width(&pills);
-        let mut x = (w as f32 - total) / 2.0;
-        for (pix, alpha) in &pills {
-            let y = h as f32 - pix.height() as f32 - 28.0 * s.min(h as f32 / 400.0).max(0.4);
-            blend_pixmap(frame, pix, x.round() as i32, y.round() as i32, *alpha);
-            x += pix.width() as f32 + gap;
+        if !merged {
+            return rects;
         }
+    }
+}
+
+/// Draws `f` over an NV12 frame: only the areas the overlays cover are turned into RGB, drawn
+/// on and put back, which is far cheaper than converting the whole frame.
+pub fn draw_nv12(frame: &mut Nv12, f: &Frame, cursors: &Cursors, opts: &Overlays, style: &Style, fonts: &Fonts) {
+    let (w, h) = (frame.w, frame.h);
+    let s = style.dpi.clamp(0.5, 4.0);
+    let pills = if opts.keys { key_pills(f, w, h, s, fonts) } else { Vec::new() };
+    for (x, y, rw, rh) in areas(f, cursors, opts, style, &pills, w, h) {
+        let mut part = frame.region_to_rgba(x as u32, y as u32, rw as u32, rh as u32);
+        paint(&mut part, (x, y), f, cursors, opts, style, &pills);
+        frame.put_rgba(&part, x as u32, y as u32);
     }
 }
 
@@ -369,6 +488,60 @@ mod tests {
         let touched = changed(&img, &blank);
         assert!(!touched.is_empty());
         assert!(touched.iter().all(|(x, _)| *x >= 8 && *x < 312), "fits inside the frame");
+    }
+
+    #[test]
+    fn nv12_drawing_matches_rgba_drawing() {
+        let fonts = crate::capture_bar::fonts();
+        let f = Frame {
+            pointer: Some(Pointer { x: 101, y: 51, id: 7, hx: 1, hy: 1 }),
+            clicks: vec![
+                Click { x: 300, y: 80, button: Button::Right, age: 100 },
+                Click { x: 110, y: 60, button: Button::Left, age: 40 },
+            ],
+            keys: vec![KeyLabel { label: "Ctrl + S".into(), age: 0 }],
+        };
+        let opts = Overlays { pointer_highlight: true, ..Overlays::default() };
+        let mut rgba = frame();
+        draw(&mut rgba, &f, &arrow(), &opts, &style(), fonts);
+        let mut nv = Nv12::from_rgba(&frame());
+        draw_nv12(&mut nv, &f, &arrow(), &opts, &style(), fonts);
+        // Same picture, up to the color conversion.
+        let want = Nv12::from_rgba(&rgba).to_rgba();
+        let got = nv.to_rgba();
+        let worst = want
+            .pixels()
+            .zip(got.pixels())
+            .map(|(a, b)| (0..3).map(|i| (a[i] as i32 - b[i] as i32).abs()).max().unwrap())
+            .max()
+            .unwrap();
+        assert!(worst <= 6, "{worst}");
+        // Nothing drawn: the frame is untouched.
+        let mut nv = Nv12::from_rgba(&frame());
+        let before = nv.clone();
+        draw_nv12(&mut nv, &Frame::default(), &arrow(), &opts, &style(), fonts);
+        assert_eq!(nv, before);
+    }
+
+    #[test]
+    fn areas_are_even_inside_and_apart() {
+        let fonts = crate::capture_bar::fonts();
+        let f = Frame {
+            pointer: Some(Pointer { x: 3, y: 3, id: 7, hx: 0, hy: 0 }),
+            clicks: vec![
+                Click { x: 5, y: 5, button: Button::Left, age: 0 },
+                Click { x: 390, y: 290, button: Button::Left, age: 0 },
+            ],
+            keys: vec![],
+        };
+        let opts = Overlays::default();
+        let r = areas(&f, &arrow(), &opts, &style(), &[], 400, 300);
+        assert_eq!(r.len(), 2, "{r:?}");
+        for (x, y, w, h) in &r {
+            assert!(x % 2 == 0 && y % 2 == 0 && w % 2 == 0 && h % 2 == 0, "{r:?}");
+            assert!(*x >= 0 && *y >= 0 && x + w <= 400 && y + h <= 300);
+        }
+        let _ = fonts;
     }
 
     #[test]

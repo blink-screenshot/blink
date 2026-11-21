@@ -261,6 +261,9 @@ pub struct Recording {
     pub keys: crate::rec::keys::KeyMode,
     /// Count down 3-2-1 before recording starts.
     pub countdown: bool,
+    /// Record every pixel of a sharp screen (200% and up). Off: half size there, which looks
+    /// like the same screen at 100%, with files four times smaller and a quicker save.
+    pub full_resolution: bool,
     /// Where recordings go.
     pub output_dir: PathBuf,
 }
@@ -279,6 +282,7 @@ impl Default for Recording {
             click_highlight: true,
             keys: crate::rec::keys::KeyMode::Off,
             countdown: true,
+            full_resolution: false,
             output_dir: videos.join("Blink"),
         }
     }

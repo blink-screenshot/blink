@@ -61,7 +61,7 @@ Most screenshot tools stop at "capture and draw an arrow". Blink goes one step f
 2. Run it. Blink installs per user in `%LOCALAPPDATA%\Programs\Blink`, without admin rights, and starts with Windows (you can switch that off).
 3. Press **Print Screen**.
 
-The installer is not code-signed yet, so Windows SmartScreen warns the first time: choose *More info*, then *Run anyway*. Every release is built by GitHub Actions from this repository, and the release page lists the SHA-256 checksum of each file.
+The installer is not code-signed yet, so Windows SmartScreen warns the first time: choose *More info*, then *Run anyway*. Every release is built by GitHub Actions from this repository, and the release page lists the SHA-256 checksum of each file. Signing is on its way: see the [code signing policy](https://blink-screenshot.github.io/blink/code-signing.html).
 
 **Windows 11:** turn off *Settings > Accessibility > Keyboard > Use the Print Screen key to open screen capture*, or Windows keeps Print Screen for the Snipping Tool. Blink's settings show for each hotkey whether it works, with a button to that Windows setting and an **Override** button.
 
