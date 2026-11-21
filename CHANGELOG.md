@@ -2,6 +2,12 @@
 
 All notable changes to Blink, per version. Every version is on [GitHub](https://github.com/blink-screenshot/blink/releases) with its installer; the release notes are taken from this file.
 
+## [1.3.1] - 2026-11-21
+
+### Bug fixes
+
+- **Screen recording works.** In 1.3.0 the recorder closed as soon as the countdown appeared, and the notification only said it stopped unexpectedly. If a recording ever fails now, the notification and `recorder.log` say why.
+
 ## [1.3.0] - 2026-11-21
 
 ### New features
