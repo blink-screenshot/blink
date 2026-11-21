@@ -32,7 +32,7 @@ On Linux, the editor and every test work; capturing, the tray and hotkeys are Wi
 
 - Keep a pull request to one change. Smaller is easier to review.
 - Run `cargo fmt` and `cargo test` before pushing. CI runs the tests on Windows and Linux.
-- Every user-visible text goes through `t("...")`; add the Dutch translation to `src/i18n_nl.rs` (a test fails when one is missing). If you do not speak Dutch, say so in the pull request and a maintainer will add it.
+- Every user-visible text goes through `t("...")`; add its translation to every table in `src/i18n_*.rs` (Dutch, German, French, Spanish, Portuguese; a test fails when one is missing). If you do not speak one of them, say so in the pull request and a maintainer will add it.
 - If you change dependencies, run `python tools/third_party_notices.py`.
 - Describe user-visible changes in your pull request; the maintainer adds them to `CHANGELOG.md` at release time.
 - Colours come from `src/theme.rs`; do not hard-code new ones.

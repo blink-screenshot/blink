@@ -21,7 +21,7 @@ Repository: `blink-screenshot/blink`. Website: `site/`, published to GitHub Page
 ## Code
 
 - Run `cargo fmt` and `cargo test` before committing. Tests also run on Linux; capture, tray and hotkeys are Windows-only (`src/platform/win/`).
-- Every user-visible text goes through `t("...")`, with a Dutch translation in `src/i18n_nl.rs`; a test fails if one is missing.
+- Every user-visible text goes through `t("...")`, with a translation in every table: `src/i18n_nl.rs`, `i18n_de.rs`, `i18n_fr.rs`, `i18n_es.rs` and `i18n_pt.rs` (Brazilian Portuguese); a test fails if one is missing.
 - Colours come from `src/theme.rs` only.
 - After changing dependencies, run `python tools/third_party_notices.py`; CI fails if `THIRD-PARTY-NOTICES.md` is out of date.
 - Keep claims on the website and in the README true: check them against the code (counts of backgrounds, devices, emoji, capture modes) when features change.

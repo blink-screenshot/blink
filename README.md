@@ -37,13 +37,13 @@ Most screenshot tools stop at "capture and draw an arrow". Blink goes one step f
 
 | | |
 |---|---|
-| **Capture** | Region, window (hover and click), inner pane (Ctrl + click, for example a browser's page), screen under the mouse, all screens, active window, and **scrolling capture** of a whole page. One overlay over all monitors, with a magnifier and a mode bar. |
+| **Capture** | Region, window (hover and click), inner pane (Ctrl + click, for example a browser's page), screen under the mouse, all screens, active window, and **scrolling capture** of a whole page. One overlay over all monitors, with a magnifier and a mode bar. Optionally with the mouse pointer, as a separate object in the editor. |
 | **Annotate** | Arrows (five head styles), lines, rectangles, ellipses, shapes (star, hexagon, flowchart shapes), freehand, highlighter, text (bold, italic, underline, strikethrough, background), speech bubbles, **numbered steps**, 54 **emoji stamps**, crop. Colour picker with eyedropper. Every tool has a one-key shortcut and remembers its last settings. |
 | **Redact** | Blur, pixelate or black box. Click a word, key or e-mail address to hide it, or drag over anything. **Find private info** suggests what to hide (e-mail addresses, phone numbers, IBANs, card numbers, IP addresses, keys and tokens, passwords, BSN), you confirm. |
-| **Text (OCR)** | **Copy text from the screen**: a text mode in the capture overlay that copies the line you point at, a paragraph (Ctrl + click) or all text in a region. In the editor: select text like in a document, copy it, or hide it. Offline, with the OCR engine of Windows. |
+| **Text (OCR)** | **Copy text from the screen**: a text mode in the capture overlay that copies the line you point at, a paragraph (Ctrl + click) or all text in a region. In the editor: select text like in a document, copy it, or hide it. Offline, with the OCR engine of Windows. **QR codes**: point at one in the overlay to copy what it says, or Ctrl + click to open its link. |
 | **Present** | Backgrounds (gradients, mesh, waves, solid, transparent, your own), canvas ratios and exact sizes for social media and slides, device mockups that pick the device fitting your screenshot. |
-| **Output** | Copy, Save to a fixed folder, Save as (PNG, JPEG, WebP, BMP). Per capture type: open the editor, copy, save, or ask with a small menu at the mouse. Notification with Edit, Save and Save as. |
-| **Everything else** | Configurable hotkeys with an Override for keys other apps have taken, start with Windows, automatic updates with checksum verification, English and Dutch, dark and light theme. |
+| **Output** | Copy, Save to a fixed folder, Save as (PNG, JPEG, WebP, BMP). Per capture type: open the editor, copy, save, or ask with a small menu at the mouse. Notification with Edit, Save and Save as. **History** in the tray menu: your latest screenshots, to copy or edit again. |
+| **Everything else** | Configurable hotkeys with an Override for keys other apps have taken, start with Windows, automatic updates with checksum verification, English, Dutch, German, French, Spanish and Portuguese, dark and light theme. |
 
 <p align="center">
   <img src="site/img/shot-mockup-warm.png" width="420" alt="An annotated screenshot in a monitor mockup on a warm gradient">

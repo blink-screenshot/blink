@@ -36,6 +36,8 @@ pub enum Kind {
     },
     /// Emoji stamp (Twemoji file id, e.g. "1f44d"), drawn in the square centered in `a`-`b`.
     Emoji(String),
+    /// The mouse pointer captured with the screenshot, stretched over `a`-`b`.
+    Pointer(std::sync::Arc<image::RgbaImage>),
 }
 
 impl Kind {
@@ -367,6 +369,7 @@ impl Annotation {
                 | Kind::Shape(_)
                 | Kind::Callout { .. }
                 | Kind::Emoji(_)
+                | Kind::Pointer(_)
         )
     }
 
@@ -447,7 +450,7 @@ impl Annotation {
             Kind::Freehand(pts) => pts.windows(2).any(|s| dist_to_segment(p, s[0], s[1]) <= w),
             Kind::Highlight | Kind::Redact(_) => self.rect().expand(tol).contains(p),
             Kind::Text(_) | Kind::Step(_) => self.bounds(text_size).expand(tol).contains(p),
-            Kind::Emoji(_) => self.rect().expand(tol).contains(p),
+            Kind::Emoji(_) | Kind::Pointer(_) => self.rect().expand(tol).contains(p),
             Kind::Shape(k) => {
                 let (outline, _) = shape_outline(*k, self.rect());
                 point_in_polygon(p, &outline) || near_polyline(p, &outline, true, w)

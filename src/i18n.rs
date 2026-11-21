@@ -1,29 +1,57 @@
-//! Interface language: English (the default) and Dutch.
+//! Interface language: English (the default), Dutch, German, French, Spanish and Portuguese.
 //!
 //! The English text is the key: `t("Copy")` returns the text in the current language, and
 //! falls back to the English when a translation is missing. Placeholders are `{0}`, `{1}`,
-//! ... and filled in with [`tf`]. The Dutch table is in `i18n_nl.rs`; a test checks that every
-//! `t("...")` / `tf("...")` in the sources has a Dutch entry.
+//! ... and filled in with [`tf`]. The tables are in `i18n_nl.rs`, `i18n_de.rs`, ...; tests check
+//! that every `t("...")` / `tf("...")` in the sources has an entry in every table.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
 
+/// Stored in the settings by name: only add variants at the end.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
     #[default]
     English,
     Dutch,
+    German,
+    French,
+    Spanish,
+    Portuguese,
 }
 
+type Table = &'static [(&'static str, &'static str)];
+
 impl Language {
-    pub const ALL: [Language; 2] = [Language::English, Language::Dutch];
+    pub const ALL: [Language; 6] = [
+        Language::English,
+        Language::Dutch,
+        Language::German,
+        Language::French,
+        Language::Spanish,
+        Language::Portuguese,
+    ];
     /// The language's own name (shown untranslated, so you can always find yours).
     pub fn native_name(self) -> &'static str {
         match self {
             Language::English => "English",
             Language::Dutch => "Nederlands",
+            Language::German => "Deutsch",
+            Language::French => "Fran\u{e7}ais",
+            Language::Spanish => "Espa\u{f1}ol",
+            Language::Portuguese => "Portugu\u{ea}s (Brasil)",
+        }
+    }
+    fn table(self) -> Option<Table> {
+        match self {
+            Language::English => None,
+            Language::Dutch => Some(crate::i18n_nl::NL),
+            Language::German => Some(crate::i18n_de::DE),
+            Language::French => Some(crate::i18n_fr::FR),
+            Language::Spanish => Some(crate::i18n_es::ES),
+            Language::Portuguese => Some(crate::i18n_pt::PT),
         }
     }
 }
@@ -35,23 +63,26 @@ pub fn set_language(l: Language) {
 }
 
 pub fn language() -> Language {
-    match LANG.load(Ordering::Relaxed) {
-        1 => Language::Dutch,
-        _ => Language::English,
-    }
+    let i = LANG.load(Ordering::Relaxed) as usize;
+    Language::ALL.get(i).copied().unwrap_or_default()
 }
 
-fn dutch() -> &'static HashMap<&'static str, &'static str> {
-    static MAP: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    MAP.get_or_init(|| crate::i18n_nl::NL.iter().copied().collect())
+fn map(l: Language) -> Option<&'static HashMap<&'static str, &'static str>> {
+    static MAPS: OnceLock<Vec<HashMap<&'static str, &'static str>>> = OnceLock::new();
+    let maps = MAPS.get_or_init(|| {
+        Language::ALL.iter().map(|l| l.table().map(|t| t.iter().copied().collect()).unwrap_or_default()).collect()
+    });
+    l.table().map(|_| &maps[l as usize])
+}
+
+/// `en` in language `l`.
+pub fn t_in(l: Language, en: &'static str) -> &'static str {
+    map(l).and_then(|m| m.get(en).copied()).unwrap_or(en)
 }
 
 /// `en` in the current language.
 pub fn t(en: &'static str) -> &'static str {
-    match language() {
-        Language::English => en,
-        Language::Dutch => dutch().get(en).copied().unwrap_or(en),
-    }
+    t_in(language(), en)
 }
 
 /// `en` in the current language with `{0}`, `{1}`, ... replaced by `args`.
@@ -91,6 +122,7 @@ mod tests {
         ("platform/win/http.rs", include_str!("platform/win/http.rs")),
         ("platform/win/resident.rs", include_str!("platform/win/resident.rs")),
         ("platform/win/overlay.rs", include_str!("platform/win/overlay.rs")),
+        ("history.rs", include_str!("history.rs")),
     ];
 
     /// Every string literal passed directly to t( or tf( in `src`.
@@ -139,42 +171,72 @@ mod tests {
         out
     }
 
+    fn translated() -> impl Iterator<Item = (Language, &'static HashMap<&'static str, &'static str>)> {
+        Language::ALL.into_iter().filter_map(|l| map(l).map(|m| (l, m)))
+    }
+
     #[test]
-    fn every_text_has_a_dutch_translation() {
+    fn every_text_has_a_translation() {
         let mut missing = Vec::new();
-        for (file, src) in SOURCES {
-            for k in keys(src) {
-                if !dutch().contains_key(k.as_str()) {
-                    missing.push(format!("{file}: {k:?}"));
+        for (l, m) in translated() {
+            for (file, src) in SOURCES {
+                for k in keys(src) {
+                    if !m.contains_key(k.as_str()) {
+                        missing.push(format!("{l:?} {file}: {k:?}"));
+                    }
                 }
             }
         }
         missing.sort();
         missing.dedup();
-        assert!(missing.is_empty(), "missing Dutch:\n{}", missing.join("\n"));
+        assert!(missing.is_empty(), "missing translations:\n{}", missing.join("\n"));
+    }
+
+    /// Every table has the same keys as the Dutch one (no forgotten or stale entries).
+    #[test]
+    fn all_tables_have_the_same_keys() {
+        let nl: std::collections::BTreeSet<&str> = crate::i18n_nl::NL.iter().map(|(k, _)| *k).collect();
+        for l in Language::ALL {
+            if let Some(t) = l.table() {
+                let keys: std::collections::BTreeSet<&str> = t.iter().map(|(k, _)| *k).collect();
+                let extra: Vec<_> = keys.difference(&nl).collect();
+                let missing: Vec<_> = nl.difference(&keys).collect();
+                assert!(extra.is_empty() && missing.is_empty(), "{l:?}: extra {extra:?}, missing {missing:?}");
+            }
+        }
     }
 
     /// Names that are translated where they are shown, with `t(name)`.
     #[test]
-    fn every_name_has_a_dutch_translation() {
+    fn every_name_has_a_translation() {
         let mut names: Vec<&str> = Vec::new();
         names.extend(crate::annot::ShapeKind::ALL.iter().map(|k| k.name()));
         names.extend(crate::annot::ArrowHead::ALL.iter().map(|k| k.name()));
         names.extend(crate::frame::Aspect::ALL.iter().chain(&crate::frame::Aspect::SIZES).map(|a| a.name()));
         names.extend(crate::frame::PRESETS.iter().map(|p| p.name));
         names.extend(crate::frame::DEVICES.iter().map(|d| d.group.name()));
-        let missing: Vec<_> = names.into_iter().filter(|n| !n.contains(':') && !dutch().contains_key(n)).collect();
-        assert!(missing.is_empty(), "missing Dutch: {missing:?}");
+        for (l, m) in translated() {
+            let missing: Vec<_> = names.iter().filter(|n| !n.contains(':') && !m.contains_key(*n)).collect();
+            assert!(missing.is_empty(), "missing {l:?}: {missing:?}");
+        }
     }
 
     #[test]
     fn no_duplicate_keys_and_placeholders_match() {
-        let mut seen = std::collections::HashSet::new();
-        for (en, nl) in crate::i18n_nl::NL {
-            assert!(seen.insert(en), "duplicate key {en:?}");
-            for i in 0..5 {
-                let p = format!("{{{i}}}");
-                assert_eq!(en.contains(&p), nl.contains(&p), "placeholder {p} in {en:?}");
+        for l in Language::ALL {
+            let Some(table) = l.table() else { continue };
+            let mut seen = std::collections::HashSet::new();
+            for (en, tr) in table {
+                assert!(seen.insert(en), "{l:?}: duplicate key {en:?}");
+                for i in 0..5 {
+                    let p = format!("{{{i}}}");
+                    assert_eq!(en.contains(&p), tr.contains(&p), "{l:?}: placeholder {p} in {en:?}");
+                }
+                // A menu accelerator (&x) stays a single accelerator.
+                if en.contains('&') && !en.contains(" & ") {
+                    assert_eq!(tr.matches('&').count(), 1, "{l:?}: accelerator in {en:?}");
+                }
+                assert_eq!(en.contains('\t'), tr.contains('\t'), "{l:?}: tab in {en:?}");
             }
         }
     }
@@ -182,7 +244,8 @@ mod tests {
     #[test]
     fn fallback_and_format() {
         // (Does not switch the process language: other tests run at the same time.)
-        assert!(!dutch().contains_key("this text has no translation"));
+        assert_eq!(t_in(Language::German, "this text has no translation"), "this text has no translation");
+        assert_eq!(t_in(Language::Dutch, "Copy"), "Kopi\u{eb}ren");
         assert_eq!(tf("{0} of {1}", &[&1, &"x"]), "1 of x");
     }
 }

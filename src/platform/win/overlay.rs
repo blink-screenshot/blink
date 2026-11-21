@@ -19,7 +19,7 @@
 use super::capture::{child_windows, monitor_rects, IRect, Shot, WinInfo};
 use super::{monitor_at, wide};
 use crate::capture_bar::{self, Hit, Mode};
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 use crate::ocr::{self, OcrError, Page};
 use crate::theme::{self, DARK};
 use std::cell::RefCell;
@@ -38,9 +38,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, ReleaseCaptur
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, LoadCursorW,
     PostMessageW, RegisterClassExW, SetCursor, SetCursorPos, SetForegroundWindow, ShowWindow, TranslateMessage,
-    HTCLIENT, IDC_ARROW, IDC_CROSS, IDC_SIZEALL, IDC_WAIT, MSG, SW_SHOW, WM_APP, WM_DPICHANGED, WM_ERASEBKGND,
-    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR,
-    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    HTCLIENT, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_SIZEALL, IDC_WAIT, MSG, SW_SHOW, WM_APP, WM_DPICHANGED,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP,
+    WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 #[derive(Clone, Debug)]
@@ -50,10 +50,15 @@ pub struct Outcome {
     /// Text mode: the text that was picked (empty when there was none), or why it could not
     /// be read.
     pub text: Option<Result<String, OcrError>>,
+    /// A click on a QR code: what it says, and whether to open it (Ctrl+click on a web link)
+    /// instead of copying it.
+    pub qr: Option<(String, bool)>,
 }
 
 /// Posted by the reading thread when the text of the screen is read.
 const TEXT_READ_MSG: u32 = WM_APP + 40;
+/// Posted by the QR thread when the screen has been searched for QR codes.
+const QR_READ_MSG: u32 = WM_APP + 41;
 
 /// The text on the frozen screen (text mode).
 enum TextState {
@@ -129,6 +134,11 @@ struct State {
     waiting: Option<(IRect, Option<Vec<usize>>)>,
     /// Everything must be painted again (the lit-up text changed).
     redraw_all: bool,
+    /// The QR codes on the frozen screen (client coordinates), once they are found.
+    qr: Vec<(IRect, String)>,
+    qr_rx: Option<Receiver<Vec<(IRect, String)>>>,
+    /// Region and text mode, pointing at a QR code: which one.
+    qr_hover: Option<usize>,
 }
 
 thread_local! {
@@ -222,6 +232,9 @@ pub fn select(shot: &Shot, windows: Vec<WinInfo>, mode: Mode, magnifier: bool) -
             text_hover: None,
             waiting: None,
             redraw_all: false,
+            qr: Vec::new(),
+            qr_rx: None,
+            qr_hover: None,
         };
         STATE.with(|s| *s.borrow_mut() = Some(state));
 
@@ -248,6 +261,7 @@ pub fn select(shot: &Shot, windows: Vec<WinInfo>, mode: Mode, magnifier: bool) -
             if s.mode == Mode::Text {
                 start_reading(s);
             }
+            start_qr(s);
             update_hover(s);
         });
         ShowWindow(hwnd, SW_SHOW);
@@ -383,7 +397,17 @@ fn cursor_monitor_rect(s: &State) -> IRect {
 
 fn update_hover(s: &mut State) {
     s.text_hover = None;
+    s.qr_hover = None;
     let ctrl = unsafe { GetKeyState(VK_CONTROL as i32) } < 0;
+    // On a QR code (region and text mode): the code, to copy what it says.
+    if matches!(s.mode, Mode::Region | Mode::Text) {
+        let slack = (4.0 * s.scale) as i32;
+        if let Some(i) = s.qr.iter().position(|(r, _)| grow(*r, slack).contains(s.cur.0, s.cur.1)) {
+            s.hover = Some(grow(s.qr[i].0, slack).intersect(&client_bounds(s)));
+            s.qr_hover = Some(i);
+            return;
+        }
+    }
     match s.mode {
         Mode::Screen => {
             s.hover = Some(cursor_monitor_rect(s));
@@ -436,6 +460,55 @@ fn update_hover(s: &mut State) {
         Some(r) => to_client(s, r).intersect(&client_bounds(s)),
         None => cursor_monitor_rect(s),
     });
+}
+
+// ---- QR codes ----------------------------------------------------------------------------
+
+/// Searches the frozen screen for QR codes on a worker thread, one monitor at a time.
+fn start_qr(s: &mut State) {
+    // Safe: the state, and with it this pointer, only exists while `select` runs.
+    let shot = unsafe { &*s.shot };
+    let mut parts: Vec<(IRect, Vec<u8>)> = monitor_rects().into_iter().filter_map(|m| shot.crop_bgra(m)).collect();
+    if parts.is_empty() {
+        parts.extend(shot.crop_bgra(shot.rect));
+    }
+    let origin = (shot.rect.x, shot.rect.y);
+    let hwnd = s.hwnd;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut found = Vec::new();
+        for (r, bgra) in parts {
+            for c in crate::qr::find_bgra(&bgra, r.w as usize, r.h as usize) {
+                let (x, y, w, h) = c.rect;
+                found.push((IRect { x: x + r.x - origin.0, y: y + r.y - origin.1, w, h }, c.content));
+            }
+        }
+        if !found.is_empty() && tx.send(found).is_ok() {
+            unsafe {
+                PostMessageW(hwnd as HWND, QR_READ_MSG, 0, 0);
+            }
+        }
+    });
+    s.qr_rx = Some(rx);
+}
+
+fn qr_read(s: &mut State) {
+    if let Some(found) = s.qr_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        s.qr = found;
+        if s.press.is_none() {
+            update_hover(s);
+        }
+    }
+}
+
+/// What the labels say over a QR code: its content, and what a click does.
+fn qr_labels(content: &str) -> (String, &'static str) {
+    let hint = if crate::qr::is_web_link(content) {
+        t("Click to copy the link \u{b7} Ctrl+click to open it")
+    } else {
+        t("Click to copy what the QR code says")
+    };
+    (tf("QR code: {0}", &[&ocr::preview(content, 48)]), hint)
 }
 
 // ---- text --------------------------------------------------------------------------------
@@ -536,6 +609,7 @@ fn finish_text(s: &mut State, rect: IRect, lines: Option<Vec<usize>>) {
         rect: IRect { x: rect.x + s.origin.0, y: rect.y + s.origin.1, ..rect },
         scroll: false,
         text: Some(text),
+        qr: None,
     }));
 }
 
@@ -756,7 +830,28 @@ unsafe fn decorations(s: &State, dc: HDC, draw: bool) -> Vec<IRect> {
         regions.push(marks);
         // Size label above the selection (inside if there is no room), in the same color as
         // the marks like the crop tool in the editor.
-        let text = if s.mode == Mode::Text { text_label(s, sel) } else { format!("{} × {}", sel.w, sel.h) };
+        let qr = s.qr_hover.filter(|_| !s.dragging).and_then(|i| s.qr.get(i)).map(|(_, c)| qr_labels(c));
+        let text = match &qr {
+            Some((content, _)) => content.clone(),
+            None if s.mode == Mode::Text => text_label(s, sel),
+            None => format!("{} × {}", sel.w, sel.h),
+        };
+        if let Some((_, hint)) = qr {
+            // What a click does, under the code.
+            if let Some(label) = capture_bar::label(hint, DARK.panel, Some(DARK.border), DARK.text, sc, fonts) {
+                let (lw, lh) = (label.width() as i32, label.height() as i32);
+                let gap = mark_w + (6.0 * sc) as i32;
+                let mut ly = sel.bottom() + gap;
+                if ly + lh > s.size.1 {
+                    ly = sel.bottom() - lh - gap;
+                }
+                let lx = (sel.x + sel.w / 2 - lw / 2).max(0).min(s.size.0 - lw);
+                if draw {
+                    blend_pixmap(dc, &label, lx, ly);
+                }
+                regions.push(IRect { x: lx, y: ly, w: lw, h: lh });
+            }
+        }
         if let Some(label) = capture_bar::label(&text, s.mode.color(), None, theme::INK, sc, fonts) {
             let (lw, lh) = (label.width() as i32, label.height() as i32);
             let gap = mark_w + (6.0 * sc) as i32;
@@ -912,6 +1007,20 @@ fn set_mode(s: &mut State, mode: Mode) {
 }
 
 fn finish(s: &mut State, rect: Option<IRect>) {
+    // A click (not a drag) on a QR code copies what it says, or with Ctrl opens its link.
+    if let Some(i) = s.qr_hover.filter(|_| !s.dragging && rect.is_some() && rect == s.hover) {
+        let content = s.qr[i].1.clone();
+        let ctrl = unsafe { GetKeyState(VK_CONTROL as i32) } < 0;
+        let open = ctrl && crate::qr::is_web_link(&content);
+        let r = s.qr[i].0;
+        s.result = Some(Some(Outcome {
+            rect: IRect { x: r.x + s.origin.0, y: r.y + s.origin.1, ..r },
+            scroll: false,
+            text: None,
+            qr: Some((content, open)),
+        }));
+        return;
+    }
     if s.mode == Mode::Text {
         let Some(r) = rect.filter(|r| !r.is_empty()) else {
             s.result = Some(None);
@@ -925,6 +1034,7 @@ fn finish(s: &mut State, rect: Option<IRect>) {
         rect: IRect { x: r.x + s.origin.0, y: r.y + s.origin.1, ..r },
         scroll: s.mode == Mode::Scroll,
         text: None,
+        qr: None,
     }));
 }
 
@@ -938,6 +1048,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_DPICHANGED => 0, // keep covering the whole virtual screen, never rescale
         TEXT_READ_MSG => {
             with_state(text_read);
+            refresh(hwnd);
+            0
+        }
+        QR_READ_MSG => {
+            with_state(qr_read);
             refresh(hwnd);
             0
         }
@@ -975,6 +1090,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 match if s.press.is_none() { bar_at(s, pt.x - s.origin.0, pt.y - s.origin.1) } else { None } {
                     Some(Some(Hit::Grip)) => IDC_SIZEALL,
                     Some(_) => IDC_ARROW,
+                    // A hand over a QR code: a click copies it.
+                    None if s.qr_hover.is_some() && !s.dragging => IDC_HAND,
                     None => IDC_CROSS,
                 }
             })

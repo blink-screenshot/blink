@@ -2,8 +2,8 @@
 //! Pure Win32 with no UI framework, so it idles at a few MB of RAM and reacts instantly.
 
 use super::capture::{
-    app_window, class_name, foreground_app_window, grab, grab_rgba, is_cloaked, top_level_windows, virtual_screen,
-    window_bounds, IRect,
+    app_window, class_name, foreground_app_window, grab, grab_pointer, grab_rgba, is_cloaked, top_level_windows,
+    virtual_screen, window_bounds, IRect,
 };
 use super::kbhook::{self, FORCED_HOTKEY_MSG};
 use super::tray_icons::{self, Icon};
@@ -11,7 +11,7 @@ use super::{cursor_pos, monitor_at, overlay, scroll, toast, wide, CAPTURE_MESSAG
 use crate::capture_bar::Mode;
 use crate::config::{config_path, Config, Hotkey, HotkeyState, HotkeyStatus, HotkeyStatusEntry};
 use crate::i18n::{t, tf};
-use crate::imageio;
+use crate::imageio::{self, Pointer};
 use crate::ocr::{self, OcrError};
 use crate::toast_xml::Button;
 use core::ffi::c_void;
@@ -39,11 +39,11 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-    DispatchMessageW, EnumWindows, FindWindowW, GetForegroundWindow, GetMessageW, GetSystemMetrics,
+    DispatchMessageW, EnumWindows, FindWindowW, GetForegroundWindow, GetMenuItemCount, GetMessageW, GetSystemMetrics,
     GetWindowThreadProcessId, IsWindowVisible, LoadImageW, PeekMessageW, PostMessageW, PostQuitMessage,
     RegisterClassExW, RegisterWindowMessageW, SetForegroundWindow, SetMenuInfo, SetMenuItemInfoW, SetWindowPos,
     ShowWindow, SystemParametersInfoW, TrackPopupMenu, TranslateMessage, ASFW_ANY, EVENT_SYSTEM_FOREGROUND, IMAGE_ICON,
-    LR_DEFAULTCOLOR, MENUINFO, MENUITEMINFOW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MIIM_BITMAP, MIM_STYLE,
+    LR_DEFAULTCOLOR, MENUINFO, MENUITEMINFOW, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MIIM_BITMAP, MIM_STYLE,
     MNS_CHECKORBMP, MSG, PM_REMOVE, SM_CXSMICON, SM_CYSMICON, SPI_GETSELECTIONFADE, SPI_SETSELECTIONFADE,
     SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
     WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CONTEXTMENU, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP,
@@ -89,7 +89,12 @@ enum Action {
     EditCaptureText,
     /// Opens the language settings of Windows, to add text recognition (not a menu item).
     OcrLanguages,
+    /// A screenshot picked in the History submenu (which one: `HISTORY_PICK`).
+    HistoryItem,
 }
+
+/// Menu ids of the History submenu: `HISTORY_BASE + index`.
+const HISTORY_BASE: usize = 1000;
 
 impl Action {
     fn from_id(id: usize) -> Option<Action> {
@@ -131,6 +136,8 @@ thread_local! {
     /// center), with its number. Presses of any other toast are stale and ignored.
     static CAPTURE_TOAST: RefCell<Option<(u32, ToastNotification)>> = const { RefCell::new(None) };
     static TOAST_COUNTER: Cell<u32> = const { Cell::new(0) };
+    /// The history entry chosen in the menu, for `Action::HistoryItem`.
+    static HISTORY_PICK: Cell<Option<u64>> = const { Cell::new(None) };
 }
 
 /// Newer version found by the background check (shared with that thread).
@@ -161,6 +168,21 @@ fn start_update_checks(hwnd: HWND) {
             }
             std::thread::sleep(Duration::from_secs(24 * 3600));
         }
+    });
+}
+
+/// Removes expired History screenshots now (and those beyond the limits), in the background.
+fn prune_history() {
+    let limits = crate::history::Limits::from_config(&cfg());
+    std::thread::spawn(move || crate::history::prune(limits));
+}
+
+/// Removes expired History screenshots at start and every ten minutes after, so they are
+/// gone from the disk on time, not only when the menu opens.
+fn start_history_cleanup() {
+    std::thread::spawn(|| loop {
+        crate::history::prune(crate::history::Limits::from_config(&Config::load()));
+        std::thread::sleep(Duration::from_secs(600));
     });
 }
 
@@ -269,6 +291,7 @@ pub fn run_resident() -> Result<(), String> {
             });
         }
         start_update_checks(hwnd);
+        start_history_cleanup();
 
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
@@ -695,6 +718,37 @@ impl PopupMenu {
         }
     }
 
+    /// An item with a picture instead of an icon (the History previews).
+    unsafe fn add_bitmap(&mut self, id: usize, bmp: windows_sys::Win32::Graphics::Gdi::HBITMAP, text: &str) {
+        let w = wide(text);
+        AppendMenuW(self.menu, MF_STRING, id, w.as_ptr());
+        if !bmp.is_null() {
+            let mut mii: MENUITEMINFOW = std::mem::zeroed();
+            mii.cbSize = std::mem::size_of::<MENUITEMINFOW>() as u32;
+            mii.fMask = MIIM_BITMAP;
+            mii.hbmpItem = bmp;
+            SetMenuItemInfoW(self.menu, id as u32, 0, &mii);
+            self.bitmaps.push(bmp);
+        }
+    }
+
+    /// Adds `sub` as a submenu. Its bitmaps are freed with this menu.
+    unsafe fn submenu(&mut self, icon: Icon, text: &str, sub: PopupMenu) {
+        let w = wide(text);
+        let pos = GetMenuItemCount(self.menu);
+        AppendMenuW(self.menu, MF_POPUP, sub.menu as usize, w.as_ptr());
+        self.bitmaps.extend(sub.bitmaps);
+        let bmp = tray_icons::bitmap(icon, self.icon_px, self.color);
+        if !bmp.is_null() && pos >= 0 {
+            let mut mii: MENUITEMINFOW = std::mem::zeroed();
+            mii.cbSize = std::mem::size_of::<MENUITEMINFOW>() as u32;
+            mii.fMask = MIIM_BITMAP;
+            mii.hbmpItem = bmp;
+            SetMenuItemInfoW(self.menu, pos as u32, 1, &mii);
+            self.bitmaps.push(bmp);
+        }
+    }
+
     unsafe fn title(&mut self, text: &str) {
         let w = wide(text);
         AppendMenuW(self.menu, MF_STRING | MF_GRAYED, 0, w.as_ptr());
@@ -788,6 +842,11 @@ unsafe fn show_menu(hwnd: HWND, full: bool) -> Option<Action> {
     m.add(Action::Scrolling as usize, Icon::Scrolling, &menu_label(t("&Scrolling page"), c.hotkeys.scrolling));
     m.add(Action::Text as usize, Icon::Text, &menu_label(t("Copy &text from the screen"), c.hotkeys.text));
     m.separator();
+    let mut ids = Vec::new();
+    if let Some((sub, list)) = if full && c.history_size > 0 { history_menu(&m) } else { None } {
+        m.submenu(Icon::History, t("&History"), sub);
+        ids = list;
+    }
     m.add(Action::OpenFile as usize, Icon::OpenFile, t("&Open image from file..."));
     m.add(Action::OpenClipboard as usize, Icon::Clipboard, t("Open image from &clipboard"));
     if full {
@@ -800,7 +859,48 @@ unsafe fn show_menu(hwnd: HWND, full: bool) -> Option<Action> {
         m.separator();
         m.add(Action::Exit as usize, Icon::Exit, t("E&xit"));
     }
-    Action::from_id(m.track(hwnd))
+    let cmd = m.track(hwnd);
+    if let Some(id) = cmd.checked_sub(HISTORY_BASE).and_then(|i| ids.get(i)) {
+        HISTORY_PICK.with(|p| p.set(Some(*id)));
+        return Some(Action::HistoryItem);
+    }
+    Action::from_id(cmd)
+}
+
+/// "Today 14:32", "Yesterday 09:05" or "2026-11-19 16:40".
+fn history_label(e: &crate::history::Entry) -> String {
+    let Some(time) = e.time() else { return String::new() };
+    let today = chrono::Local::now().date_naive();
+    let clock = time.format("%H:%M").to_string();
+    let when = if time.date_naive() == today {
+        tf("Today {0}", &[&clock])
+    } else if today.pred_opt() == Some(time.date_naive()) {
+        tf("Yesterday {0}", &[&clock])
+    } else {
+        time.format("%Y-%m-%d %H:%M").to_string()
+    };
+    format!("{when}\t{} \u{d7} {}", e.width, e.height)
+}
+
+/// The History submenu with a preview of every screenshot, and the entry ids in menu order.
+/// Windows makes a menu that is taller than the screen scroll.
+unsafe fn history_menu(parent: &PopupMenu) -> Option<(PopupMenu, Vec<u64>)> {
+    let entries = crate::history::list(crate::history::Limits::from_config(&cfg()));
+    let mut sub = PopupMenu::new();
+    if entries.is_empty() {
+        sub.title(t("No screenshots yet"));
+        return Some((sub, Vec::new()));
+    }
+    let scale = parent.icon_px as f32 / 16.0;
+    let (w, h) = ((64.0 * scale).round() as u32, (40.0 * scale).round() as u32);
+    let mut ids = Vec::new();
+    for (i, e) in entries.iter().enumerate() {
+        let bmp = crate::history::thumbnail(e.id)
+            .map_or(std::ptr::null_mut(), |img| tray_icons::thumbnail(&img, w, h, parent.color));
+        sub.add_bitmap(HISTORY_BASE + i, bmp, &history_label(e));
+        ids.push(e.id);
+    }
+    Some((sub, ids))
 }
 
 /// What to do with a screenshot ("Ask me what to do").
@@ -851,6 +951,10 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
         wait_for_menu_to_vanish();
     }
     let c = cfg();
+    // The pointer where it is now. From a menu it would only show where that menu was.
+    let pointer = if c.capture_pointer && !menu_was_open { grab_pointer() } else { None };
+    // The screen rectangle the screenshot shows, to place the pointer in it.
+    let mut shown: Option<IRect> = None;
     let img: Option<RgbaImage> = match action {
         Action::Region | Action::Scrolling | Action::Text => {
             let windows = top_level_windows();
@@ -866,6 +970,13 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
                     // so it can go now. (Other apps' notifications cannot be removed.)
                     hide_balloon(hwnd);
                     match overlay::select(&shot, windows, mode, c.show_magnifier) {
+                        Some(out) if out.qr.is_some() => {
+                            drop(shot);
+                            if let Some((content, open)) = out.qr {
+                                deliver_qr(hwnd, &content, open);
+                            }
+                            None
+                        }
                         Some(out) if out.text.is_some() => {
                             let img = shot.crop_rgba(out.rect);
                             drop(shot);
@@ -877,15 +988,25 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
                             std::thread::sleep(Duration::from_millis(120));
                             scroll::capture(out.rect, &c)
                         }
-                        Some(out) => shot.crop_rgba(out.rect),
+                        Some(out) => {
+                            shown = Some(out.rect.intersect(&shot.rect));
+                            shot.crop_rgba(out.rect)
+                        }
                         None => None,
                     }
                 }
                 None => None,
             }
         }
-        Action::Fullscreen => grab_rgba(monitor_under_cursor()),
-        Action::AllScreens => grab_rgba(virtual_screen()),
+        Action::Fullscreen => {
+            let r = monitor_under_cursor();
+            shown = Some(r);
+            grab_rgba(r)
+        }
+        Action::AllScreens => {
+            shown = Some(virtual_screen());
+            grab_rgba(virtual_screen())
+        }
         Action::ActiveWindow => {
             let target = target_app_window();
             if let Some(w) = target {
@@ -900,17 +1021,23 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
                 }
             }
             let r = target.and_then(window_bounds).map(|r| r.intersect(&virtual_screen())).filter(|r| !r.is_empty());
-            grab_rgba(r.unwrap_or_else(monitor_under_cursor))
+            let r = r.unwrap_or_else(monitor_under_cursor);
+            shown = Some(r);
+            grab_rgba(r)
         }
         _ => None,
     };
     if let Some(img) = img {
-        deliver(hwnd, img, &c);
+        let pointer = pointer.zip(shown).and_then(|((p, x, y), r)| {
+            let p = Pointer { img: p, x: x - r.x, y: y - r.y };
+            p.overlaps(img.width(), img.height()).then_some(p)
+        });
+        deliver(hwnd, img, pointer, &c);
     }
     BUSY.with(|b| b.set(false));
 }
 
-fn deliver(hwnd: HWND, img: RgbaImage, c: &Config) {
+fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, c: &Config) {
     if c.after_capture_ask {
         let Some(choice) = (unsafe { ask_after_capture(hwnd, &img) }) else { return };
         let chosen = Config {
@@ -920,14 +1047,26 @@ fn deliver(hwnd: HWND, img: RgbaImage, c: &Config) {
             after_capture_save: choice == AfterCapture::Save,
             ..c.clone()
         };
-        return deliver(hwnd, img, &chosen);
+        return deliver(hwnd, img, pointer, &chosen);
     }
+    if c.history_size > 0 {
+        // PNG takes a moment for a big screenshot: not on the thread that answers hotkeys.
+        let (copy, ptr, limits) = (img.clone(), pointer.clone(), crate::history::Limits::from_config(c));
+        std::thread::spawn(move || crate::history::add(&copy, ptr.as_ref(), limits).ok());
+    }
+    // Copy and Save get the pointer drawn in; the editor gets it as a separate object.
+    let flat = pointer.as_ref().map(|p| {
+        let mut f = img.clone();
+        imageio::flatten(&mut f, p);
+        f
+    });
+    let out = flat.as_ref().unwrap_or(&img);
     let mut lines = Vec::new();
     let mut warning = false;
     let mut copied = false;
     let mut saved = false;
     if c.after_capture_copy {
-        match imageio::copy_to_clipboard(&img) {
+        match imageio::copy_to_clipboard(out) {
             Ok(()) => copied = true,
             Err(e) => {
                 lines.push(tf("Copy failed: {0}", &[&e]));
@@ -937,7 +1076,7 @@ fn deliver(hwnd: HWND, img: RgbaImage, c: &Config) {
     }
     if c.after_capture_save {
         let path = c.next_output_path();
-        match imageio::save_image(&path, &img, c.format, c.jpg_quality) {
+        match imageio::save_image(&path, out, c.format, c.jpg_quality) {
             Ok(()) => {
                 lines.push(tf("Saved as {0}", &[&path.display()]));
                 saved = true;
@@ -949,7 +1088,7 @@ fn deliver(hwnd: HWND, img: RgbaImage, c: &Config) {
         }
     }
     let path = imageio::temp_raw_path();
-    let raw = imageio::write_raw(&path, &img);
+    let raw = imageio::write_capture(&path, &img, pointer.as_ref());
     let open = c.after_capture_open_editor || (!c.after_capture_copy && !c.after_capture_save);
     if open {
         match raw {
@@ -1028,10 +1167,57 @@ fn deliver_text(hwnd: HWND, text: Result<String, OcrError>, img: Option<RgbaImag
     BALLOON_IMAGE.with(|c| *c.borrow_mut() = Some(path));
 }
 
+/// A click on a QR code in the overlay: copies what it says, or opens its link (Ctrl+click;
+/// only http and https links get that far).
+fn deliver_qr(hwnd: HWND, content: &str, open: bool) {
+    if open && crate::qr::is_web_link(content) {
+        super::open_url(content);
+        return;
+    }
+    match imageio::copy_text_to_clipboard(content) {
+        Ok(()) => {
+            let title = if crate::qr::is_web_link(content) { t("Link copied") } else { t("QR code copied") };
+            balloon(hwnd, title, &ocr::preview(content, 160), false);
+        }
+        Err(e) => balloon(hwnd, t("QR code not copied"), &tf("Copy failed: {0}", &[&e]), true),
+    }
+}
+
 fn discard(raw: Option<PathBuf>) {
     if let Some(p) = raw {
         std::fs::remove_file(p).ok();
     }
+}
+
+/// A screenshot picked in History: copied again, with the same notification as a new
+/// capture (Edit, Save, Save as). It is not added to the history a second time.
+fn from_history(hwnd: HWND, id: u64) {
+    let (img, pointer) = match crate::history::load(id) {
+        Ok(v) => v,
+        Err(e) => return balloon(hwnd, t("Screenshot not found"), &e, true),
+    };
+    let mut flat = img.clone();
+    if let Some(p) = &pointer {
+        imageio::flatten(&mut flat, p);
+    }
+    let copied = imageio::copy_to_clipboard(&flat);
+    drop(flat);
+    let path = imageio::temp_raw_path();
+    let (title, body) = match &copied {
+        Ok(()) => (t("Screenshot copied to clipboard"), t("From your history.").to_string()),
+        Err(e) => (t("Screenshot taken"), tf("Copy failed: {0}", &[e])),
+    };
+    if imageio::write_capture(&path, &img, pointer.as_ref()).is_err() {
+        std::fs::remove_file(&path).ok();
+        return balloon(hwnd, title, &body, copied.is_err());
+    }
+    if show_capture_toast(hwnd, title, &body, false) {
+        BALLOON_IMAGE.with(|c| *c.borrow_mut() = Some(path));
+        return;
+    }
+    balloon(hwnd, title, &format!("{}\n{body}", t("Click to open it in the editor.")), copied.is_err());
+    BALLOON_CLICK.with(|c| c.set(Some(Action::EditCapture)));
+    BALLOON_IMAGE.with(|c| *c.borrow_mut() = Some(path));
 }
 
 /// The "Save" button of the capture notification: saves that screenshot like "save after
@@ -1040,7 +1226,7 @@ fn save_capture(hwnd: HWND) {
     // Taken first: showing a notification discards the screenshot that is still in there.
     let Some(path) = BALLOON_IMAGE.with(|c| c.borrow_mut().take()) else { return };
     let c = cfg();
-    let result = imageio::read_raw(&path).map_err(|e| e.to_string()).and_then(|img| {
+    let result = imageio::read_capture_flat(&path).map_err(|e| e.to_string()).and_then(|img| {
         let out = c.next_output_path();
         imageio::save_image(&out, &img, c.format, c.jpg_quality).map(|()| out)
     });
@@ -1094,6 +1280,11 @@ fn run_action(hwnd: HWND, action: Action, from_menu: bool) {
             hide_capture_toast();
         }
         Action::SaveCapture => save_capture(hwnd),
+        Action::HistoryItem => {
+            if let Some(id) = HISTORY_PICK.with(|p| p.take()) {
+                from_history(hwnd, id);
+            }
+        }
         Action::SaveCaptureAs => {
             // A separate process shows the file dialog, so the tray keeps answering hotkeys.
             // It deletes the file when it is done with it.
@@ -1123,6 +1314,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     if msg == RELOAD.with(|c| c.get()) {
         CONFIG.with(|c| *c.borrow_mut() = Config::load());
         cfg().apply_globals();
+        prune_history();
         register_hotkeys(hwnd, false);
         return 0;
     }

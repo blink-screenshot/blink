@@ -32,6 +32,102 @@ pub fn read_raw(path: &Path) -> std::io::Result<RgbaImage> {
     RgbaImage::from_raw(w, h, data).ok_or_else(|| std::io::Error::other("bad raw image size"))
 }
 
+const POINTER_MAGIC: &[u8; 8] = b"BLNKPTR1";
+
+/// The mouse pointer of a screenshot, kept apart from the pixels so the editor can move or
+/// delete it. `x`, `y` is its top-left corner in image pixels (it may stick out).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pointer {
+    pub img: RgbaImage,
+    pub x: i32,
+    pub y: i32,
+}
+
+impl Pointer {
+    /// Whether any of it lands on an image of `w` x `h`.
+    pub fn overlaps(&self, w: u32, h: u32) -> bool {
+        self.x < w as i32
+            && self.y < h as i32
+            && self.x + self.img.width() as i32 > 0
+            && self.y + self.img.height() as i32 > 0
+    }
+}
+
+/// Draws the pointer onto the image (alpha blended), for copying and saving.
+pub fn flatten(img: &mut RgbaImage, p: &Pointer) {
+    for (px, py, src) in p.img.enumerate_pixels() {
+        let (x, y) = (p.x + px as i32, p.y + py as i32);
+        if x < 0 || y < 0 || x >= img.width() as i32 || y >= img.height() as i32 {
+            continue;
+        }
+        let a = src[3] as u32;
+        if a == 0 {
+            continue;
+        }
+        let dst = img.get_pixel_mut(x as u32, y as u32);
+        let da = dst[3] as u32;
+        let out_a = a + da * (255 - a) / 255;
+        for c in 0..3 {
+            let v = (src[c] as u32 * a * 255 + dst[c] as u32 * da * (255 - a)) / (out_a.max(1) * 255);
+            dst[c] = v.min(255) as u8;
+        }
+        dst[3] = out_a.min(255) as u8;
+    }
+}
+
+/// The hand-off file with the pointer as a separate part after the pixels (old readers of
+/// `read_raw` ignore it).
+pub fn write_capture(path: &Path, img: &RgbaImage, pointer: Option<&Pointer>) -> std::io::Result<()> {
+    write_raw(path, img)?;
+    if let Some(p) = pointer {
+        let mut f = std::io::BufWriter::new(std::fs::OpenOptions::new().append(true).open(path)?);
+        f.write_all(POINTER_MAGIC)?;
+        f.write_all(&p.x.to_le_bytes())?;
+        f.write_all(&p.y.to_le_bytes())?;
+        f.write_all(&p.img.width().to_le_bytes())?;
+        f.write_all(&p.img.height().to_le_bytes())?;
+        f.write_all(p.img.as_raw())?;
+        f.flush()?;
+    }
+    Ok(())
+}
+
+/// Reads a hand-off file with its pointer, if it has one.
+pub fn read_capture(path: &Path) -> std::io::Result<(RgbaImage, Option<Pointer>)> {
+    let img = read_raw(path)?;
+    let mut f = std::fs::File::open(path)?;
+    let skip = 16 + img.as_raw().len() as u64;
+    let len = f.metadata()?.len();
+    if len < skip + 24 {
+        return Ok((img, None));
+    }
+    std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(skip))?;
+    let mut header = [0u8; 24];
+    f.read_exact(&mut header)?;
+    if &header[..8] != POINTER_MAGIC {
+        return Ok((img, None));
+    }
+    let num = |i: usize| <[u8; 4]>::try_from(&header[i..i + 4]).unwrap();
+    let (x, y) = (i32::from_le_bytes(num(8)), i32::from_le_bytes(num(12)));
+    let (w, h) = (u32::from_le_bytes(num(16)), u32::from_le_bytes(num(20)));
+    if w == 0 || h == 0 || w > 1024 || h > 1024 {
+        return Ok((img, None));
+    }
+    let mut data = vec![0u8; w as usize * h as usize * 4];
+    f.read_exact(&mut data)?;
+    let pointer = RgbaImage::from_raw(w, h, data).map(|img| Pointer { img, x, y });
+    Ok((img, pointer))
+}
+
+/// Reads a hand-off file with the pointer drawn onto it.
+pub fn read_capture_flat(path: &Path) -> std::io::Result<RgbaImage> {
+    let (mut img, pointer) = read_capture(path)?;
+    if let Some(p) = pointer {
+        flatten(&mut img, &p);
+    }
+    Ok(img)
+}
+
 pub fn temp_raw_path() -> PathBuf {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     std::env::temp_dir().join(format!("blink_{}_{nanos}.raw", std::process::id()))
@@ -178,5 +274,34 @@ mod tests {
         let back = read_raw(&p).unwrap();
         std::fs::remove_file(&p).ok();
         assert_eq!(img, back);
+    }
+
+    #[test]
+    fn capture_with_pointer_roundtrip_and_flatten() {
+        let img = RgbaImage::from_pixel(6, 4, image::Rgba([0, 0, 0, 255]));
+        let ptr = Pointer {
+            img: RgbaImage::from_fn(3, 3, |x, _| image::Rgba([255, 255, 255, if x == 0 { 0 } else { 255 }])),
+            x: 4,
+            y: -1,
+        };
+        let p = std::env::temp_dir().join("blink_test_pointer.raw");
+        write_capture(&p, &img, Some(&ptr)).unwrap();
+        // Old readers still get the plain image.
+        assert_eq!(read_raw(&p).unwrap(), img);
+        let (back, back_ptr) = read_capture(&p).unwrap();
+        assert_eq!(back, img);
+        assert_eq!(back_ptr.as_ref(), Some(&ptr));
+        let flat = read_capture_flat(&p).unwrap();
+        std::fs::remove_file(&p).ok();
+        // Transparent column stays black, opaque column (x = 5) turns white, clipped rows skipped.
+        assert_eq!(flat.get_pixel(4, 0).0, [0, 0, 0, 255]);
+        assert_eq!(flat.get_pixel(5, 0).0, [255, 255, 255, 255]);
+        assert_eq!(flat.get_pixel(5, 1).0, [255, 255, 255, 255]);
+        assert_eq!(flat.get_pixel(5, 2).0, [0, 0, 0, 255]);
+        assert!(ptr.overlaps(6, 4) && !Pointer { x: 6, ..ptr.clone() }.overlaps(6, 4));
+        // Without a pointer: nothing extra.
+        write_capture(&p, &img, None).unwrap();
+        assert_eq!(read_capture(&p).unwrap().1, None);
+        std::fs::remove_file(&p).ok();
     }
 }
