@@ -56,6 +56,7 @@ enum Page {
     General,
     Hotkeys,
     Capture,
+    Recording,
     Editor,
     Output,
     Updates,
@@ -63,13 +64,22 @@ enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 7] =
-        [Page::General, Page::Hotkeys, Page::Capture, Page::Editor, Page::Output, Page::Updates, Page::About];
+    const ALL: [Page; 8] = [
+        Page::General,
+        Page::Hotkeys,
+        Page::Capture,
+        Page::Recording,
+        Page::Editor,
+        Page::Output,
+        Page::Updates,
+        Page::About,
+    ];
     fn name(self) -> &'static str {
         match self {
             Page::General => t("General"),
             Page::Hotkeys => t("Hotkeys"),
             Page::Capture => t("Capture"),
+            Page::Recording => t("Recording"),
             Page::Editor => t("Editor"),
             Page::Output => t("Output"),
             Page::Updates => t("Updates"),
@@ -329,14 +339,17 @@ impl eframe::App for SettingsApp {
                             self.cfg.skipped_version.clone(),
                             self.cfg.last_version.clone(),
                             self.cfg.updated_at,
+                            self.cfg.recording.output_dir.clone(),
                         );
-                        self.cfg = Config {
+                        let mut fresh = Config {
                             output_dir: keep.0,
                             skipped_version: keep.1,
                             last_version: keep.2,
                             updated_at: keep.3,
                             ..Config::default()
                         };
+                        fresh.recording.output_dir = keep.4;
+                        self.cfg = fresh;
                         self.apply_look(ctx);
                     }
                     if let Some((msg, err)) = &self.status {
@@ -378,6 +391,7 @@ impl eframe::App for SettingsApp {
                             Page::General => self.general(ui, ctx),
                             Page::Hotkeys => self.hotkeys_page(ui),
                             Page::Capture => self.capture(ui),
+                            Page::Recording => self.recording_page(ui),
                             Page::Editor => self.editor(ui),
                             Page::Output => self.output(ui),
                             Page::Updates => self.updates(ui),
@@ -760,6 +774,90 @@ impl SettingsApp {
             });
             ui.end_row();
         });
+    }
+
+    fn recording_page(&mut self, ui: &mut egui::Ui) {
+        use crate::config::VideoFormat;
+        use crate::rec::keys::KeyMode;
+        let r = &mut self.cfg.recording;
+        section(ui, t("Recording"));
+        note(ui, &tf("Press {0}, or choose Record in the capture overlay (key R), then pick a region, window or screen. Stop with the same hotkey, the stop button or the tray menu.", &[&self.cfg.hotkeys.record.label()]));
+        ui.add_space(8.0);
+        egui::Grid::new("rec").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+            ui.label(t("Save as"));
+            ui.horizontal(|ui| {
+                for f in VideoFormat::ALL {
+                    ui.selectable_value(&mut r.format, f, f.name());
+                }
+                info(ui, "rec-format", t("MP4: small, sharp and smooth, plays everywhere. The choice for longer recordings and for chat apps that play video.\n\nGIF: plays by itself anywhere an image can go (documentation, tickets, older chat apps), but files are larger and colors are limited. Best for a few seconds.\n\nThe notification after a recording can always make the other one too."));
+            });
+            ui.end_row();
+            ui.label(t("Frames per second"));
+            ui.horizontal(|ui| {
+                for fps in [15, 30] {
+                    ui.selectable_value(&mut r.fps, fps, fps.to_string());
+                }
+                info(ui, "rec-fps", t("30 is smooth. 15 makes smaller files and is enough for most screen work. A GIF always gets 12."));
+            });
+            ui.end_row();
+            ui.label(t("Largest GIF width"));
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut r.gif_max_width).range(320..=1920).speed(10.0).suffix(" px"));
+                info(ui, "rec-gifw", t("Wider recordings are scaled down for a GIF, which keeps files small. 960 px reads well in chat and documentation."));
+            });
+            ui.end_row();
+            ui.label(t("Folder"));
+            ui.horizontal(|ui| {
+                let mut s = r.output_dir.display().to_string();
+                if ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).changed() {
+                    r.output_dir = s.into();
+                }
+                if ui.button(t("Browse...")).clicked() {
+                    if let Some(d) = rfd::FileDialog::new().set_directory(&r.output_dir).pick_folder() {
+                        r.output_dir = d;
+                    }
+                }
+                if ui.button(t("Open")).clicked() {
+                    std::fs::create_dir_all(&r.output_dir).ok();
+                    platform::open_folder(&r.output_dir);
+                }
+            });
+            ui.end_row();
+        });
+
+        section(ui, t("While recording"));
+        check(ui, &mut r.countdown, t("Count down 3, 2, 1 before recording starts"), None);
+        check(
+            ui,
+            &mut r.pointer_highlight,
+            t("Highlight the mouse pointer"),
+            Some(("rec-ptr", t("A soft yellow circle around the pointer, so viewers can follow it."))),
+        );
+        check(
+            ui,
+            &mut r.click_highlight,
+            t("Show clicks"),
+            Some(("rec-click", t("A ring where you click: orange for the left button, blue for the right."))),
+        );
+        note(ui, t("The pointer and these highlights are added when the recording is saved, so you can still switch them off afterwards in the clip window."));
+
+        section(ui, t("Show keys and clicks in recordings"));
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("rec-keys").selected_text(r.keys.label()).width(320.0).show_ui(ui, |ui| {
+                for k in KeyMode::ALL {
+                    ui.selectable_value(&mut r.keys, k, k.label());
+                }
+            });
+            info(ui, "rec-keys", t("Shortcuts and clicks only: combinations with Ctrl, Alt or Win (Ctrl+C, Alt+Tab, Win+E), keys like F1 to F12, Esc, Enter, Tab, the arrows and Delete, and clicks with a modifier (Ctrl+click). Typing, with or without Shift, is never shown.\n\nAll keys and clicks: also everything you type.\n\nKeys are kept only with the recording, on this PC, and are deleted with it after a day. Blink sends nothing anywhere."));
+        });
+        match r.keys {
+            KeyMode::All => {
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(RichText::new(t("Careful: everything you type while recording ends up in the video, passwords included. Use this only for a demo where you type nothing private.")).color(pal().warn)).wrap());
+            }
+            KeyMode::Shortcuts => note(ui, t("Typing never shows, so passwords stay out of the video.")),
+            KeyMode::Off => note(ui, t("Off: Blink does not watch the keyboard while recording.")),
+        }
     }
 
     fn updates(&mut self, ui: &mut egui::Ui) {

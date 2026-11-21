@@ -9,6 +9,9 @@
 //! drags the bar anywhere on the screen, to leave the default spot free for a capture. Holding Ctrl (or
 //! being in scrolling mode) snaps to inner panes such as a browser's page area.
 //!
+//! In recording mode (R) the selection is what gets recorded: a region, a window or a screen,
+//! always on one monitor (a drag is cut off at the edge of the monitor it started on).
+//!
 //! In text mode (T) the overlay copies text instead of taking a picture. The frozen screen is
 //! read on a worker thread as soon as the mode is on; once it is, the text on the screen lights
 //! up. Pointing at text picks its line (with Ctrl: its paragraph), dragging picks the text in
@@ -53,6 +56,8 @@ pub struct Outcome {
     /// A click on a QR code: what it says, and whether to open it (Ctrl+click on a web link)
     /// instead of copying it.
     pub qr: Option<(String, bool)>,
+    /// Recording mode: record this area (always on one monitor) instead of taking a picture.
+    pub record: bool,
 }
 
 /// Posted by the reading thread when the text of the screen is read.
@@ -80,6 +85,7 @@ const fn hex(c: u32) -> COLORREF {
 }
 const ACCENT: COLORREF = hex(theme::hex::ACCENT);
 const SCROLL: COLORREF = hex(theme::hex::SIGNAL);
+const RECORD: COLORREF = hex(theme::hex::RECORD);
 const PANEL: COLORREF = hex(theme::hex::INK);
 
 struct Gdi {
@@ -348,9 +354,28 @@ fn selection(s: &State) -> Option<IRect> {
     if s.dragging {
         let (px, py) = s.press?;
         let (cx, cy) = s.cur;
-        Some(IRect::from_ltrb(px.min(cx), py.min(cy), px.max(cx) + 1, py.max(cy) + 1))
+        let r = IRect::from_ltrb(px.min(cx), py.min(cy), px.max(cx) + 1, py.max(cy) + 1);
+        // A recording covers one monitor: the one the drag started on.
+        Some(if s.mode == Mode::Record { r.intersect(&monitor_rect_at(s, px, py)) } else { r })
     } else {
         s.hover
+    }
+}
+
+/// The monitor at `(x, y)` (client coordinates), in client coordinates.
+fn monitor_rect_at(s: &State, x: i32, y: i32) -> IRect {
+    match monitor_at(POINT { x: x + s.origin.0, y: y + s.origin.1 }) {
+        Some((m, _, _)) => to_client(s, IRect::from_rect(m)),
+        None => client_bounds(s),
+    }
+}
+
+/// The color of the selection in the current mode.
+fn mode_color(mode: Mode) -> COLORREF {
+    match mode {
+        Mode::Scroll => SCROLL,
+        Mode::Record => RECORD,
+        _ => ACCENT,
     }
 }
 
@@ -440,7 +465,7 @@ fn update_hover(s: &mut State) {
                 }
             }
         }
-        Mode::Region | Mode::Scroll => {}
+        Mode::Region | Mode::Scroll | Mode::Record => {}
     }
     let (x, y) = (s.cur.0 + s.origin.0, s.cur.1 + s.origin.1);
     let deep = s.mode == Mode::Scroll || ctrl;
@@ -457,6 +482,8 @@ fn update_hover(s: &mut State) {
         }
     }
     s.hover = Some(match hover {
+        // A window that runs onto another monitor is recorded as far as it is on this one.
+        Some(r) if s.mode == Mode::Record => to_client(s, r).intersect(&cursor_monitor_rect(s)),
         Some(r) => to_client(s, r).intersect(&client_bounds(s)),
         None => cursor_monitor_rect(s),
     });
@@ -610,6 +637,7 @@ fn finish_text(s: &mut State, rect: IRect, lines: Option<Vec<usize>>) {
         scroll: false,
         text: Some(text),
         qr: None,
+        record: false,
     }));
 }
 
@@ -815,7 +843,7 @@ unsafe fn decorations(s: &State, dc: HDC, draw: bool) -> Vec<IRect> {
     let bw = sc.round().max(1.0) as i32;
     let mark_w = (3.0 * sc).round().max(3.0) as i32;
     if let Some(sel) = selection(s) {
-        let c = if s.mode == Mode::Scroll { SCROLL } else { ACCENT };
+        let c = mode_color(s.mode);
         let screens = screens_under(s, sel);
         let line = grow(sel, bw).intersect(&screens);
         let marks = grow(sel, mark_w).intersect(&screens);
@@ -1018,6 +1046,7 @@ fn finish(s: &mut State, rect: Option<IRect>) {
             scroll: false,
             text: None,
             qr: Some((content, open)),
+            record: false,
         }));
         return;
     }
@@ -1035,6 +1064,7 @@ fn finish(s: &mut State, rect: Option<IRect>) {
         scroll: s.mode == Mode::Scroll,
         text: None,
         qr: None,
+        record: s.mode == Mode::Record,
     }));
 }
 
@@ -1172,7 +1202,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     let m = cursor_monitor_rect(s);
                     finish(s, Some(m))
                 }
-                0x41 => {
+                // All screens: not for a recording, which covers one monitor.
+                0x41 if s.mode != Mode::Record => {
                     let all = client_bounds(s);
                     finish(s, Some(all))
                 }
@@ -1182,6 +1213,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
                 0x54 => {
                     let next = if s.mode == Mode::Text { Mode::Region } else { Mode::Text };
+                    set_mode(s, next);
+                }
+                0x52 => {
+                    let next = if s.mode == Mode::Record { Mode::Region } else { Mode::Record };
                     set_mode(s, next);
                 }
                 // Space: next mode. Ignore auto-repeat so holding it down does not spin through.

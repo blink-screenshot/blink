@@ -123,6 +123,14 @@ mod tests {
         ("platform/win/resident.rs", include_str!("platform/win/resident.rs")),
         ("platform/win/overlay.rs", include_str!("platform/win/overlay.rs")),
         ("history.rs", include_str!("history.rs")),
+        ("clip_ui.rs", include_str!("clip_ui.rs")),
+        ("rec/mod.rs", include_str!("rec/mod.rs")),
+        ("rec/bar.rs", include_str!("rec/bar.rs")),
+        ("rec/keys.rs", include_str!("rec/keys.rs")),
+        ("rec/export.rs", include_str!("rec/export.rs")),
+        ("platform/win/rec/mod.rs", include_str!("platform/win/rec/mod.rs")),
+        ("platform/win/rec/mf.rs", include_str!("platform/win/rec/mf.rs")),
+        ("platform/win/rec/recorder.rs", include_str!("platform/win/rec/recorder.rs")),
     ];
 
     /// Every string literal passed directly to t( or tf( in `src`.

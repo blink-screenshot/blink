@@ -87,3 +87,50 @@ pub fn ocr_engine() -> Result<Box<dyn crate::ocr::Engine>, crate::ocr::OcrError>
 }
 
 pub fn open_language_settings() {}
+
+// ---- screen recording (Windows only) ----
+
+const NO_RECORDING: &str = "Screen recording only works on Windows.";
+
+pub fn run_recorder(_dir: &std::path::Path) -> Result<(), String> {
+    Err(NO_RECORDING.into())
+}
+
+pub fn stop_recording() -> bool {
+    false
+}
+
+pub fn record_test() -> Result<(), String> {
+    Err(NO_RECORDING.into())
+}
+
+pub fn open_video(
+    _path: &std::path::Path,
+    _size: Option<(u32, u32)>,
+) -> Result<Box<dyn crate::rec::export::VideoSource + Send>, String> {
+    Err(NO_RECORDING.into())
+}
+
+pub fn export_recording(
+    _dir: &std::path::Path,
+    _path: &std::path::Path,
+    _format: crate::config::VideoFormat,
+    _overlays: crate::rec::compose::Overlays,
+    _trim: crate::rec::export::Trim,
+    _gif_max_width: u32,
+    _progress: &mut dyn FnMut(f32) -> bool,
+) -> Result<u64, String> {
+    Err(NO_RECORDING.into())
+}
+
+pub fn export_gif(_dir: &std::path::Path) -> Result<(), String> {
+    Err(NO_RECORDING.into())
+}
+
+pub fn gif_result(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("gif.json")
+}
+
+pub fn copy_files(_paths: &[std::path::PathBuf]) -> Result<(), String> {
+    Err(NO_RECORDING.into())
+}

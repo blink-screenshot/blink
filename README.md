@@ -6,7 +6,7 @@
 
 **Screenshots that look finished the moment you take them.**
 
-A free, open-source screenshot tool for Windows: capture a region, a window or a whole scrolling page, mark it up, black out what is private, and put it on a background or a device mockup.
+A free, open-source screenshot tool for Windows: capture a region, a window or a whole scrolling page, mark it up, black out what is private, and put it on a background or a device mockup. It also records the screen to MP4 or GIF.
 
 [![Download for Windows](https://img.shields.io/badge/Download-Windows%2010%20%26%2011-FF2E93?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/blink-screenshot/blink/releases/latest/download/Blink-Setup.exe)
 [![macOS: not yet](https://img.shields.io/badge/macOS-not%20yet-555?style=for-the-badge&logo=apple&logoColor=white)](docs/PLATFORMS.md)
@@ -40,6 +40,7 @@ Most screenshot tools stop at "capture and draw an arrow". Blink goes one step f
 | **Capture** | Region, window (hover and click), inner pane (Ctrl + click, for example a browser's page), screen under the mouse, all screens, active window, and **scrolling capture** of a whole page. One overlay over all monitors, with a magnifier and a mode bar. Optionally with the mouse pointer, as a separate object in the editor. |
 | **Annotate** | Arrows (five head styles), lines, rectangles, ellipses, shapes (star, hexagon, flowchart shapes), freehand, highlighter, text (bold, italic, underline, strikethrough, background), speech bubbles, **numbered steps**, 54 **emoji stamps**, crop. Colour picker with eyedropper. Every tool has a one-key shortcut and remembers its last settings. |
 | **Redact** | Blur, pixelate or black box. Click a word, key or e-mail address to hide it, or drag over anything. **Find private info** suggests what to hide (e-mail addresses, phone numbers, IBANs, card numbers, IP addresses, keys and tokens, passwords, BSN), you confirm. |
+| **Record** | A video of a region, window or screen, as **MP4 or GIF**: a 3-2-1 countdown, a small bar with time, pause, stop and discard. The mouse pointer, a highlight around it, rings where you click and (if you want) the shortcuts you press are added when you save, so you can switch them off afterwards. Trim the start and end in the clip window, with a size estimate before you save. Uses the video encoder in Windows, so the download hardly grew. |
 | **Text (OCR)** | **Copy text from the screen**: a text mode in the capture overlay that copies the line you point at, a paragraph (Ctrl + click) or all text in a region. In the editor: select text like in a document, copy it, or hide it. Offline, with the OCR engine of Windows. **QR codes**: point at one in the overlay to copy what it says, or Ctrl + click to open its link. |
 | **Present** | Backgrounds (gradients, mesh, waves, solid, transparent, your own), canvas ratios and exact sizes for social media and slides, device mockups that pick the device fitting your screenshot. |
 | **Output** | Copy, Save to a fixed folder, Save as (PNG, JPEG, WebP, BMP). Per capture type: open the editor, copy, save, or ask with a small menu at the mouse. Notification with Edit, Save and Save as. **History** in the tray menu: your latest screenshots, to copy or edit again. |
@@ -75,19 +76,19 @@ Blink checks for updates once a day. Installing an update is one click; the down
 | Active window | `Alt + Print Screen` |
 | Scrolling page | `Ctrl + Shift + Print Screen` |
 | Copy text from the screen | `Ctrl + Alt + Print Screen` |
+| Record the screen (again to stop) | `Ctrl + Alt + Shift + Print Screen` |
 | Capture menu | `Ctrl + Print Screen` |
 
-**In the capture overlay:** drag = region · click = window · hold Ctrl = inner pane · `F` this screen · `A` all screens · `S` scrolling · `T` copy text (click = line, Ctrl + click = paragraph, drag = region) · Space = next mode · arrow keys = move the mouse 1 px · `Esc` or right-click = cancel.
+**In the capture overlay:** drag = region · click = window · hold Ctrl = inner pane · `F` this screen · `A` all screens · `S` scrolling · `T` copy text (click = line, Ctrl + click = paragraph, drag = region) · `R` record (drag = region, click = window, `F` = screen) · Space = next mode · arrow keys = move the mouse 1 px · `Esc` or right-click = cancel.
 
 **In the editor:** `V` select, `X` select text (OCR), `R` rectangle, `E` ellipse, `S` shapes, `L` line, `A` arrow, `P` freehand, `H` highlighter, `T` text, `O` speech bubble, `N` step, `M` emoji, `B` blur, `C` crop · hold `Ctrl` to select with any tool · `Shift` = straight/square · `Ctrl+Z / Ctrl+Y` · `Ctrl+C` copy, `Ctrl+S` save, `Ctrl+Shift+S` save as · `F1` or `?` lists every shortcut.
 
 ## Limitations
 
 - **Windows 10 and 11, 64-bit only** for now. The editor is portable; capture, hotkeys and the tray are Windows code. See [docs/PLATFORMS.md](docs/PLATFORMS.md) for what macOS and Linux need.
-- **No screen recording.** If you need it, ShareX or the Snipping Tool do it well.
+- **Screen recording** has no sound yet, records one monitor at a time, and a window is recorded as the area it had when you started (it does not follow the window if you move it). Windows N editions need the Media Feature Pack for it.
 - **Text recognition reads the languages installed in Windows** (Settings > Time & language > Language & region). It reads printed screen text well and handwriting poorly, and it can misread characters: *Find private info* is a help, not a guarantee.
 - **Scrolling capture** scrolls with simulated mouse wheel steps. It works in browsers, editors, chat apps and File Explorer; it can stop early on content that changes while scrolling (video, animations, lazy loading).
-- The mouse cursor is not included in screenshots.
 
 ## Support Blink
 
