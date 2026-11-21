@@ -24,6 +24,9 @@ Useful preview commands (they write PNGs, no Windows needed):
 |---|---|
 | `BLINK_GALLERY=<dir> cargo test gallery -- --ignored` | every device mockup and background |
 | `BLINK_BAR_PREVIEW=<dir> cargo test capture_bar -- --nocapture` | the mode bar of the capture overlay, in every mode and language |
+| `BLINK_BAR_PREVIEW=<dir> cargo test rec::bar -- --nocapture` | the recording bar and the countdown |
+
+On Windows, `Blink --record-test` records three seconds of the monitor under the mouse and saves it as set in Settings; `%LOCALAPPDATA%\Blink\recordings\recorder.log` says which capture method and encoder were used and what failed.
 
 ## Releasing
 
@@ -57,6 +60,10 @@ The repository is public, so the check needs no token or account. GitHub allows 
 - **Text recognition with the engine Windows has.** `Windows.Media.Ocr` ships with Windows 10 and 11, works offline and adds nothing to the download; Tesseract or an ONNX model would add 10 to 40 MB and a native build. Its weak spot is small text, so images up to about 2.6 megapixels are enlarged twice before reading, images taller than the engine's maximum are read in overlapping bands, and images with a large dark area (dark mode) are read a second time inverted, because the engine is made for dark text on a light background; per line the reading with the most text is kept, because the engine silently skips words it is unsure of, often names and random strings (`ocr::read_with`). The capture overlay reads each monitor separately. *Find private info* only suggests: every finding is shown and can be turned off, and checks (IBAN mod 97, Luhn, elfproef) keep false alarms down where a format has one.
 - **Lightweight.** The always-running part (tray, hotkeys, capture, overlay) is plain Win32 with no UI framework. The editor starts as a separate process when needed (egui/OpenGL), so an editor crash never takes the tray down, and several editors can run side by side.
 - **WYSIWYG.** The editor shows the output of the same software renderer that is used for export.
+- **Screen recording with what Windows has.** DXGI Desktop Duplication delivers the frames of one monitor (GPU, no yellow border, only when something changed), with GDI `BitBlt` at 15 fps as the fallback (rotated monitors, a duplication that fails). Media Foundation's Sink Writer encodes H.264 in MP4 at a constant frame rate, the Source Reader decodes; Blink adds no codec to the download. Media Foundation is loaded with `LoadLibrary`: Windows N editions lack it, and a normal import would stop Blink from starting at all there.
+- **The pointer is drawn in afterwards.** The video is recorded without the pointer into a clean master (`%LOCALAPPDATA%\Blink\recordings\<id>`), next to an event log (JSON Lines: pointer position and shape, clicks, keys, with times on the video's timeline). Saving draws the pointer, its highlight, click rings and keys from that log (`rec::compose`), so each can be switched off in the clip window. The price is a second encode when you stop: a short wait, shown on the recording bar. The working folders are deleted after a day (the newest five).
+- **Keys are filtered before they are written.** With *Shortcuts and clicks only*, typing (Shift + letter, AltGr characters, Space) never reaches the event log; only *All keys* looks up what a key types. The keyboard hook is not even installed when keys are off.
+- **The recorder is its own process** (`Blink --record <dir>`), like the editor: a crash costs one recording, never the tray, and the tray never loads Direct3D or Media Foundation. The tray only picks the area (the overlay's Record mode), starts the recorder, shows a red dot and passes "stop" on.
 
 ## Code overview
 
@@ -77,6 +84,9 @@ The repository is public, so the check needs no token or account. GitHub allows 
 | `src/frame.rs` | backgrounds, device mockups, shadow, composing the frame (tested) |
 | `src/editor/` | editor UI (egui), background/mockup side panel, remembered settings |
 | `src/platform/win/kbhook.rs` | overriding hotkeys another app already has |
+| `src/rec/` | screen recording, portable and tested: the event log (`events`), which keys are shown (`keys`), drawing the pointer, clicks and keys (`compose`), trimming and export (`export`), the GIF encoder (`gif`), the recording bar and countdown (`bar`), working folders (`store`) |
+| `src/platform/win/rec/` | screen recording on Windows: the recorder process and its windows (`recorder`), DXGI and GDI capture (`dxgi`), Media Foundation (`mf`), mouse and keyboard hooks (`hooks`), files on the clipboard |
+| `src/clip_ui.rs` | the clip window: play, trim, overlays on and off, save as MP4 or GIF |
 | `src/platform/win/toast.rs`, `src/toast_xml.rs` | notifications with buttons |
 | `src/platform/win/tray_icons.rs` | icons in the tray menu |
 | `src/theme.rs` | all colours of the app (contrast is tested) |

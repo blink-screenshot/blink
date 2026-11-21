@@ -27,6 +27,14 @@ pub mod hex {
     pub const ACCENT_DEEP: u32 = 0xC41A63;
     /// Scrolling capture.
     pub const SIGNAL: u32 = 0x22D3EE;
+    /// Screen recording: the mode, the frame around the recorded area and the tray dot. Red,
+    /// as recording is everywhere; kept apart from the pink accent and the coral of errors.
+    pub const RECORD: u32 = 0xFF3333;
+    /// Drawn into recordings (functional, not branded): the circle around the pointer, and
+    /// the rings of a left and a right click.
+    pub const REC_HIGHLIGHT: u32 = 0xFFE81A;
+    pub const REC_CLICK_LEFT: u32 = 0xFF9F1C;
+    pub const REC_CLICK_RIGHT: u32 = 0x3B82F6;
     /// Darkest surface (behind the screenshot in the editor).
     pub const CANVAS: u32 = 0x0A0B0D;
     pub const BORDER: u32 = 0x2E3138;
@@ -40,6 +48,7 @@ const fn c(rgb: u32) -> Color32 {
 // Brand colors, the same in both variants.
 pub const INK: Color32 = c(hex::INK);
 pub const ACCENT: Color32 = c(hex::ACCENT);
+pub const RECORD: Color32 = c(hex::RECORD);
 
 /// Surface, text and status colors of one variant.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -187,6 +196,18 @@ mod tests {
     #[test]
     fn signal_colors_are_readable_with_ink_on_top() {
         assert!(contrast(INK, c(hex::SIGNAL)) >= 7.0, "{}", contrast(INK, c(hex::SIGNAL)));
+    }
+
+    #[test]
+    fn recording_red_is_readable_and_stands_apart() {
+        assert!(contrast(INK, RECORD) >= 4.5, "{}", contrast(INK, RECORD));
+        assert!(distance(RECORD, ACCENT) >= 80.0, "{}", distance(RECORD, ACCENT));
+        assert!(distance(RECORD, c(hex::SIGNAL)) >= 150.0);
+        // The red only appears on dark surfaces (the overlay, the recording bar, the tray), next
+        // to the dark theme's coral; the light theme's dark red error never sits beside it.
+        assert!(distance(RECORD, DARK.error) >= 80.0, "{}", distance(RECORD, DARK.error));
+        // Left and right clicks look different.
+        assert!(distance(c(hex::REC_CLICK_LEFT), c(hex::REC_CLICK_RIGHT)) >= 150.0);
     }
 
     #[test]

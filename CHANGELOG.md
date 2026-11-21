@@ -2,6 +2,20 @@
 
 All notable changes to Blink, per version. Every version is on [GitHub](https://github.com/blink-screenshot/blink/releases) with its installer; the release notes are taken from this file.
 
+## [1.3.0] - 2026-11-21
+
+### New features
+
+- **Record your screen as MP4 or GIF.** Press `Ctrl` + `Alt` + `Shift` + `Print Screen`, or choose *Record* in the capture overlay (key `R`), and pick a region, a window or a screen. After a 3-2-1 countdown a small bar next to the area shows the time, with pause, stop and discard; the tray icon turns into a red dot. Stop with the same hotkey, the stop button or the tray menu. Recordings go to Videos\Blink.
+- **A notification after each recording**, like after a screenshot: *Recording saved (0:12, 3.4 MB)* with *Edit*, *As GIF* and *Copy*. Copy puts the file itself on the clipboard, so you can paste it straight into Teams, Slack, an e-mail or a folder.
+- **The clip window.** *Edit* opens the recording: play it, drag the handles to cut off the start and the end, switch the mouse pointer, its highlight, the click rings and the keys on or off, and save as MP4 or GIF. Before you save, it shows roughly how large the file will be.
+- **Clicks and keys in your recordings.** A ring shows where you click (orange for the left button, blue for the right), and a soft circle can follow the pointer. In Settings > Recording you can also show keys: *Shortcuts and clicks only* shows combinations like `Ctrl` + `C`, keys like `F5` or `Enter` and `Ctrl` + click, but never what you type, so passwords stay out of the video. Off by default.
+- **Settings > Recording**: MP4 or GIF, 15 or 30 frames per second, the largest GIF width, the countdown, the highlights, the keys and the folder.
+
+### Improvements
+
+- Blink uses the video encoder that is part of Windows, so the download hardly grew. On Windows N editions recording needs the Media Feature Pack; Blink tells you if it is missing.
+
 ## [1.2.0] - 2026-11-21
 
 ### New features

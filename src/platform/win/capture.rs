@@ -343,17 +343,31 @@ pub fn foreground_app_window() -> Option<HWND> {
 /// The mouse pointer as it is on screen: its image (straight alpha) and the screen position of
 /// its top-left corner. `None` when it is hidden (e.g. while typing, or on a touch screen).
 pub fn grab_pointer() -> Option<(RgbaImage, i32, i32)> {
-    use windows_sys::Win32::Graphics::Gdi::{GetObjectW, BITMAP};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DrawIconEx, GetCursorInfo, GetIconInfo, CURSORINFO, CURSOR_SHOWING, DI_NORMAL, HICON, ICONINFO,
-    };
+    let (handle, x, y) = pointer_now()?;
+    let (img, hx, hy) = pointer_picture(handle)?;
+    Some((img, x - hx, y - hy))
+}
+
+/// The pointer's shape (a handle that stays the same while the shape does) and its position
+/// (the hotspot, screen coordinates). `None` when it is hidden.
+pub fn pointer_now() -> Option<(isize, i32, i32)> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorInfo, CURSORINFO, CURSOR_SHOWING};
     unsafe {
         let mut ci: CURSORINFO = std::mem::zeroed();
         ci.cbSize = std::mem::size_of::<CURSORINFO>() as u32;
         if GetCursorInfo(&mut ci) == 0 || ci.flags & CURSOR_SHOWING == 0 || ci.hCursor.is_null() {
             return None;
         }
-        let cursor = ci.hCursor as HICON;
+        Some((ci.hCursor as isize, ci.ptScreenPos.x, ci.ptScreenPos.y))
+    }
+}
+
+/// The picture of pointer shape `handle` (straight alpha) and its hotspot.
+pub fn pointer_picture(handle: isize) -> Option<(RgbaImage, i32, i32)> {
+    use windows_sys::Win32::Graphics::Gdi::{GetObjectW, BITMAP};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DrawIconEx, GetIconInfo, DI_NORMAL, HICON, ICONINFO};
+    unsafe {
+        let cursor = handle as HICON;
         let mut ii: ICONINFO = std::mem::zeroed();
         if GetIconInfo(cursor, &mut ii) == 0 {
             return None;
@@ -407,7 +421,7 @@ pub fn grab_pointer() -> Option<(RgbaImage, i32, i32)> {
         };
         let (on_black, on_white) = (draw(0)?, draw(255)?);
         let img = pointer_from_backgrounds(&on_black, &on_white, w as u32, h as u32)?;
-        Some((img, ci.ptScreenPos.x - ii.xHotspot as i32, ci.ptScreenPos.y - ii.yHotspot as i32))
+        Some((img, ii.xHotspot as i32, ii.yHotspot as i32))
     }
 }
 

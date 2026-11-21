@@ -31,6 +31,10 @@ pub enum Icon {
     WhatsNew,
     /// A clock, for History.
     History,
+    /// Record the screen (the mode bar's icon).
+    Record,
+    /// Stop recording: a square.
+    Stop,
 }
 
 fn rrect(pb: &mut PathBuilder, l: f32, t: f32, r: f32, b: f32, rad: f32) {
@@ -71,7 +75,12 @@ fn path(icon: Icon) -> Option<tiny_skia::Path> {
     let mut pb = PathBuilder::new();
     match icon {
         // Drawn by the mode bar (see `bitmap`).
-        Icon::Region | Icon::Fullscreen | Icon::AllScreens | Icon::Scrolling | Icon::Text => return None,
+        Icon::Region | Icon::Fullscreen | Icon::AllScreens | Icon::Scrolling | Icon::Text | Icon::Record => {
+            return None
+        }
+        Icon::Stop => {
+            rrect(&mut pb, 6.0, 6.0, 18.0, 18.0, 2.5);
+        }
         Icon::Window => {
             rrect(&mut pb, 2.0, 4.0, 22.0, 20.0, 2.0);
             line(&mut pb, &[(2.0, 9.0), (22.0, 9.0)]);
@@ -188,6 +197,7 @@ pub fn bitmap(icon: Icon, size: u32, color: Color32) -> HBITMAP {
         Icon::AllScreens => Some(Mode::AllScreens),
         Icon::Scrolling => Some(Mode::Scroll),
         Icon::Text => Some(Mode::Text),
+        Icon::Record => Some(Mode::Record),
         _ => None,
     };
     if let Some(mode) = mode {
@@ -233,6 +243,38 @@ pub fn thumbnail(img: &image::RgbaImage, w: u32, h: u32, color: Color32) -> HBIT
         pm.stroke_path(&path, &paint, &Stroke { width: 1.0, ..Default::default() }, Transform::identity(), None);
     }
     dib(&pm)
+}
+
+/// The tray icon while recording: a red dot with a thin dark rim, so it stands out on a light
+/// and on a dark taskbar.
+pub fn recording_icon(size: u32) -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
+    use windows_sys::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
+    let size = size.max(16);
+    let Some(mut pm) = Pixmap::new(size, size) else { return std::ptr::null_mut() };
+    let c = size as f32 / 2.0;
+    let mut pb = PathBuilder::new();
+    pb.push_circle(c, c, size as f32 * 0.36);
+    if let Some(dot) = pb.finish() {
+        let mut paint = Paint::default();
+        let r = crate::theme::RECORD;
+        paint.set_color_rgba8(r.r(), r.g(), r.b(), 255);
+        paint.anti_alias = true;
+        pm.fill_path(&dot, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+        paint.set_color_rgba8(0, 0, 0, 90);
+        let stroke = Stroke { width: (size as f32 / 16.0).max(1.0), ..Default::default() };
+        pm.stroke_path(&dot, &paint, &stroke, Transform::identity(), None);
+    }
+    unsafe {
+        let color = dib(&pm);
+        // Every pixel's transparency comes from the color bitmap; the mask only has to exist.
+        let mask = CreateBitmap(size as i32, size as i32, 1, 1, std::ptr::null());
+        let info = ICONINFO { fIcon: 1, xHotspot: 0, yHotspot: 0, hbmMask: mask, hbmColor: color };
+        let icon = CreateIconIndirect(&info);
+        DeleteObject(color);
+        DeleteObject(mask);
+        icon
+    }
 }
 
 /// A premultiplied 32-bit bottom-up DIB (what menus expect) of a pixmap.

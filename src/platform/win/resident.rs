@@ -7,7 +7,9 @@ use super::capture::{
 };
 use super::kbhook::{self, FORCED_HOTKEY_MSG};
 use super::tray_icons::{self, Icon};
-use super::{cursor_pos, monitor_at, overlay, scroll, toast, wide, CAPTURE_MESSAGE, RELOAD_MESSAGE, RESIDENT_CLASS};
+use super::{
+    cursor_pos, monitor_at, overlay, rec, scroll, toast, wide, CAPTURE_MESSAGE, RELOAD_MESSAGE, RESIDENT_CLASS,
+};
 use crate::capture_bar::Mode;
 use crate::config::{config_path, Config, Hotkey, HotkeyState, HotkeyStatus, HotkeyStatusEntry};
 use crate::i18n::{t, tf};
@@ -59,6 +61,10 @@ const UPDATE_FOUND_MSG: u32 = WM_APP + 4;
 const TOAST_MSG: u32 = WM_APP + 5;
 /// Tray notification: the user clicked the balloon.
 const NIN_BALLOONUSERCLICK: u32 = WM_USER + 5;
+/// Posted by the thread that waits for the recorder process when it has ended.
+const RECORDING_DONE_MSG: u32 = WM_APP + 6;
+/// Posted when the "As GIF" process has ended.
+const GIF_DONE_MSG: u32 = WM_APP + 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
@@ -91,6 +97,16 @@ enum Action {
     OcrLanguages,
     /// A screenshot picked in the History submenu (which one: `HISTORY_PICK`).
     HistoryItem,
+    /// Opens the overlay in recording mode, or stops the recording that runs.
+    Record,
+    /// Stops the recording (tray menu while recording).
+    StopRecording,
+    /// Opens the recording of the notification in the clip window (not a menu item).
+    EditRecording,
+    /// Makes a GIF of the recording of the notification (not a menu item).
+    RecordingGif,
+    /// Copies the file of the notification as a file (not a menu item).
+    CopyRecording,
 }
 
 /// Menu ids of the History submenu: `HISTORY_BASE + index`.
@@ -114,6 +130,8 @@ impl Action {
             Update,
             WhatsNew,
             Text,
+            Record,
+            StopRecording,
         ]
         .into_iter()
         .find(|a| *a as usize == id)
@@ -138,6 +156,12 @@ thread_local! {
     static TOAST_COUNTER: Cell<u32> = const { Cell::new(0) };
     /// The history entry chosen in the menu, for `Action::HistoryItem`.
     static HISTORY_PICK: Cell<Option<u64>> = const { Cell::new(None) };
+    /// The working folder of the recording that runs.
+    static RECORDING: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    /// The recording the current notification is about: its working folder and its file.
+    static TOAST_RECORDING: RefCell<Option<(PathBuf, PathBuf)>> = const { RefCell::new(None) };
+    /// The red dot shown in the tray while recording.
+    static RECORDING_ICON: Cell<isize> = const { Cell::new(0) };
 }
 
 /// Newer version found by the background check (shared with that thread).
@@ -177,11 +201,12 @@ fn prune_history() {
     std::thread::spawn(move || crate::history::prune(limits));
 }
 
-/// Removes expired History screenshots at start and every ten minutes after, so they are
-/// gone from the disk on time, not only when the menu opens.
+/// Removes expired History screenshots and recording working folders at start and every ten
+/// minutes after, so they are gone from the disk on time, not only when the menu opens.
 fn start_history_cleanup() {
     std::thread::spawn(|| loop {
         crate::history::prune(crate::history::Limits::from_config(&Config::load()));
+        crate::rec::store::prune(&crate::rec::store::root(), crate::rec::store::now_ms());
         std::thread::sleep(Duration::from_secs(600));
     });
 }
@@ -341,6 +366,38 @@ unsafe fn add_tray_icon(hwnd: HWND) {
     // Mouse clicks still arrive as WM_RBUTTONUP / WM_LBUTTONUP.
     nid.Anonymous.uVersion = 3;
     Shell_NotifyIconW(NIM_SETVERSION, &nid);
+    if RECORDING.with(|r| r.borrow().is_some()) {
+        set_recording_icon(hwnd, true);
+    }
+}
+
+/// The tray icon becomes a red dot while recording, and Blink's own icon again after.
+unsafe fn set_recording_icon(hwnd: HWND, on: bool) {
+    let mut nid = tray_data(hwnd);
+    nid.uFlags = NIF_ICON | NIF_TIP;
+    nid.hIcon = if on {
+        let icon = RECORDING_ICON.with(|c| {
+            if c.get() == 0 {
+                c.set(tray_icons::recording_icon(GetSystemMetrics(SM_CXSMICON) as u32) as isize);
+            }
+            c.get()
+        });
+        copy_wstr(&mut nid.szTip, t("Blink is recording"));
+        icon as _
+    } else {
+        copy_wstr(&mut nid.szTip, t("Blink screenshot"));
+        LoadImageW(
+            GetModuleHandleW(std::ptr::null()),
+            2 as _,
+            IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON),
+            GetSystemMetrics(SM_CYSMICON),
+            LR_DEFAULTCOLOR,
+        ) as _
+    };
+    if !nid.hIcon.is_null() {
+        Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
 }
 
 unsafe fn remove_tray_icon(hwnd: HWND) {
@@ -423,10 +480,17 @@ fn discard_balloon_image() {
 
 // ---- hotkeys -----------------------------------------------------------------------------
 
-fn bindings(c: &Config) -> [(Action, Hotkey, &'static str, &'static str); 6] {
+fn bindings(c: &Config) -> [(Action, Hotkey, &'static str, &'static str); 7] {
     // In the order of `Hotkeys::list`.
-    let actions =
-        [Action::Region, Action::Fullscreen, Action::ActiveWindow, Action::Scrolling, Action::Text, Action::Picker];
+    let actions = [
+        Action::Region,
+        Action::Fullscreen,
+        Action::ActiveWindow,
+        Action::Scrolling,
+        Action::Text,
+        Action::Record,
+        Action::Picker,
+    ];
     let list = c.hotkeys.list();
     std::array::from_fn(|i| (actions[i], list[i].2, list[i].1, list[i].0))
 }
@@ -835,12 +899,20 @@ unsafe fn show_menu(hwnd: HWND, full: bool) -> Option<Action> {
             m.separator();
         }
     }
+    let recording = RECORDING.with(|r| r.borrow().is_some());
+    if recording {
+        m.add(Action::StopRecording as usize, Icon::Stop, &menu_label(t("Sto&p recording"), c.hotkeys.record));
+        m.separator();
+    }
     m.add(Action::Region as usize, Icon::Region, &menu_label(t("&Region or window"), c.hotkeys.region));
     m.add(Action::Fullscreen as usize, Icon::Fullscreen, &menu_label(t("&Full screen"), c.hotkeys.fullscreen));
     m.add(Action::AllScreens as usize, Icon::AllScreens, t("&All screens"));
     m.add(Action::ActiveWindow as usize, Icon::Window, &menu_label(t("Active &window"), c.hotkeys.active_window));
     m.add(Action::Scrolling as usize, Icon::Scrolling, &menu_label(t("&Scrolling page"), c.hotkeys.scrolling));
     m.add(Action::Text as usize, Icon::Text, &menu_label(t("Copy &text from the screen"), c.hotkeys.text));
+    if !recording {
+        m.add(Action::Record as usize, Icon::Record, &menu_label(t("Recor&d the screen"), c.hotkeys.record));
+    }
     m.separator();
     let mut ids = Vec::new();
     if let Some((sub, list)) = if full && c.history_size > 0 { history_menu(&m) } else { None } {
@@ -956,11 +1028,12 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
     // The screen rectangle the screenshot shows, to place the pointer in it.
     let mut shown: Option<IRect> = None;
     let img: Option<RgbaImage> = match action {
-        Action::Region | Action::Scrolling | Action::Text => {
+        Action::Region | Action::Scrolling | Action::Text | Action::Record => {
             let windows = top_level_windows();
             let mode = match action {
                 Action::Scrolling => Mode::Scroll,
                 Action::Text => Mode::Text,
+                Action::Record => Mode::Record,
                 _ => Mode::Region,
             };
             match grab(virtual_screen()) {
@@ -970,6 +1043,11 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
                     // so it can go now. (Other apps' notifications cannot be removed.)
                     hide_balloon(hwnd);
                     match overlay::select(&shot, windows, mode, c.show_magnifier) {
+                        Some(out) if out.record => {
+                            drop(shot);
+                            start_recording(hwnd, out.rect, &c);
+                            None
+                        }
                         Some(out) if out.qr.is_some() => {
                             drop(shot);
                             if let Some((content, open)) = out.qr {
@@ -1242,6 +1320,153 @@ fn save_capture(hwnd: HWND) {
     }
 }
 
+// ---- screen recording --------------------------------------------------------------------
+
+thread_local! {
+    /// The recording a GIF is being made of.
+    static GIF_PENDING: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+/// Starts the recorder process for `rect` (picked in the overlay): it counts down, records
+/// and saves; the tray shows a red dot until it ends.
+fn start_recording(hwnd: HWND, rect: IRect, c: &Config) {
+    use crate::rec::store;
+    let center = windows_sys::Win32::Foundation::POINT { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 };
+    let Some((mon, _, scale)) = monitor_at(center) else { return };
+    let monitor = IRect::from_rect(mon);
+    store::prune(&store::root(), store::now_ms());
+    let rec = match store::create(&store::root(), store::now_ms()) {
+        Ok(r) => r,
+        Err(e) => return balloon(hwnd, t("Recording failed"), &e.to_string(), true),
+    };
+    let spec = store::Spec {
+        x: rect.x,
+        y: rect.y,
+        w: rect.w,
+        h: rect.h,
+        monitor: [monitor.x, monitor.y, monitor.w, monitor.h],
+        scale,
+        settings: c.recording.clone(),
+        filename_pattern: c.filename_pattern.clone(),
+        hotkey: c.hotkeys.record.is_enabled().then_some(c.hotkeys.record),
+    };
+    if let Err(e) = rec.write_spec(&spec) {
+        return balloon(hwnd, t("Recording failed"), &e, true);
+    }
+    let Ok(exe) = std::env::current_exe() else { return };
+    let child = std::process::Command::new(exe).arg("--record").arg(&rec.dir).spawn();
+    let mut child = match child {
+        Ok(ch) => ch,
+        Err(e) => return balloon(hwnd, t("Recording failed"), &e.to_string(), true),
+    };
+    RECORDING.with(|r| *r.borrow_mut() = Some(rec.dir.clone()));
+    unsafe { set_recording_icon(hwnd, true) };
+    let target = hwnd as isize;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        unsafe {
+            PostMessageW(target as HWND, RECORDING_DONE_MSG, 0, 0);
+        }
+    });
+}
+
+/// The recorder ended: the tray icon goes back, and a notification says how it went.
+fn recording_done(hwnd: HWND) {
+    use crate::rec::export::{human_duration, human_size};
+    use crate::rec::store::{Rec, Status};
+    unsafe { set_recording_icon(hwnd, false) };
+    let Some(dir) = RECORDING.with(|r| r.borrow_mut().take()) else { return };
+    let rec = Rec::at(&dir);
+    let Some(o) = rec.read_result() else {
+        return balloon(
+            hwnd,
+            t("Recording failed"),
+            t("The recorder stopped unexpectedly. Details are in recorder.log."),
+            true,
+        );
+    };
+    match o.status {
+        Status::Saved => {
+            let Some(file) = o.path.clone() else { return };
+            let title = tf("Recording saved ({0}, {1})", &[&human_duration(o.duration_ms), &human_size(o.bytes)]);
+            let body = file.display().to_string();
+            let mut buttons = vec![Button { label: t("Edit"), action: Action::EditRecording as u32 }];
+            if o.format != Some(crate::config::VideoFormat::Gif) {
+                buttons.push(Button { label: t("As GIF"), action: Action::RecordingGif as u32 });
+            }
+            buttons.push(Button { label: t("Copy"), action: Action::CopyRecording as u32 });
+            if show_toast(hwnd, &title, &body, Action::EditRecording as u32, &buttons) {
+                TOAST_RECORDING.with(|r| *r.borrow_mut() = Some((dir, file)));
+            } else {
+                balloon(hwnd, &title, &format!("{}\n{body}", t("Click to open it in the clip window.")), false);
+                BALLOON_CLICK.with(|c| c.set(Some(Action::EditRecording)));
+                TOAST_RECORDING.with(|r| *r.borrow_mut() = Some((dir, file)));
+            }
+        }
+        Status::ExportFailed => {
+            let e = o.error.unwrap_or_default();
+            balloon(
+                hwnd,
+                t("Recording not saved"),
+                &tf("{0}\nClick to open it in the clip window and try again.", &[&e]),
+                true,
+            );
+            BALLOON_CLICK.with(|c| c.set(Some(Action::EditRecording)));
+            TOAST_RECORDING.with(|r| *r.borrow_mut() = Some((dir, PathBuf::new())));
+        }
+        Status::Failed if o.no_media_foundation => {
+            balloon(hwnd, t("Screen recording is not available"), crate::rec::no_media_foundation(), true);
+        }
+        Status::Failed => {
+            let e = o.error.unwrap_or_default();
+            balloon(hwnd, t("Recording failed"), &tf("{0}\nDetails are in recorder.log.", &[&e]), true);
+        }
+        Status::Discarded | Status::Cancelled => {}
+    }
+}
+
+/// "As GIF": a separate process makes it (the tray keeps answering hotkeys), then a
+/// notification offers to copy it.
+fn make_gif(hwnd: HWND, dir: PathBuf) {
+    let Ok(exe) = std::env::current_exe() else { return };
+    std::fs::remove_file(rec::gif_result(&dir)).ok();
+    let mut child = match std::process::Command::new(exe).arg("--export-gif").arg(&dir).spawn() {
+        Ok(ch) => ch,
+        Err(e) => return balloon(hwnd, t("GIF not made"), &e.to_string(), true),
+    };
+    balloon(hwnd, t("Making a GIF..."), t("You get a notification when it is ready."), false);
+    GIF_PENDING.with(|g| *g.borrow_mut() = Some(dir));
+    let target = hwnd as isize;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        unsafe {
+            PostMessageW(target as HWND, GIF_DONE_MSG, 0, 0);
+        }
+    });
+}
+
+fn gif_done(hwnd: HWND, dir: PathBuf) {
+    use crate::rec::export::human_size;
+    use crate::rec::store::{Outcome, Status};
+    let o: Option<Outcome> =
+        std::fs::read_to_string(rec::gif_result(&dir)).ok().and_then(|s| serde_json::from_str(&s).ok());
+    match o {
+        Some(o) if o.status == Status::Saved => {
+            let Some(file) = o.path else { return };
+            let title = tf("GIF saved ({0})", &[&human_size(o.bytes)]);
+            let buttons = [Button { label: t("Copy"), action: Action::CopyRecording as u32 }];
+            let body = file.display().to_string();
+            if show_toast(hwnd, &title, &body, Action::CopyRecording as u32, &buttons) {
+                TOAST_RECORDING.with(|r| *r.borrow_mut() = Some((dir, file)));
+            } else {
+                balloon(hwnd, &title, &body, false);
+            }
+        }
+        Some(o) => balloon(hwnd, t("GIF not made"), &o.error.unwrap_or_default(), true),
+        None => balloon(hwnd, t("GIF not made"), t("Details are in recorder.log."), true),
+    }
+}
+
 fn run_action(hwnd: HWND, action: Action, from_menu: bool) {
     match action {
         Action::Picker => {
@@ -1255,6 +1480,38 @@ fn run_action(hwnd: HWND, action: Action, from_menu: bool) {
         | Action::Scrolling
         | Action::AllScreens
         | Action::Text => capture(hwnd, action, from_menu),
+        Action::Record => {
+            if RECORDING.with(|r| r.borrow().is_some()) {
+                rec::stop_recording();
+            } else {
+                capture(hwnd, action, from_menu);
+            }
+        }
+        Action::StopRecording => {
+            rec::stop_recording();
+        }
+        Action::EditRecording => {
+            if let Some((dir, _)) = TOAST_RECORDING.with(|r| r.borrow().clone()) {
+                spawn_self(&["--clip", &dir.display().to_string()]);
+            }
+            hide_capture_toast();
+        }
+        Action::RecordingGif => {
+            if let Some((dir, _)) = TOAST_RECORDING.with(|r| r.borrow().clone()) {
+                hide_capture_toast();
+                make_gif(hwnd, dir);
+            }
+        }
+        Action::CopyRecording => {
+            if let Some((_, file)) = TOAST_RECORDING.with(|r| r.borrow().clone()) {
+                match rec::copy_files(std::slice::from_ref(&file)) {
+                    Ok(()) => {
+                        balloon(hwnd, t("Recording copied"), t("Paste it in a chat, an e-mail or a folder."), false)
+                    }
+                    Err(e) => balloon(hwnd, t("Recording not copied"), &e, true),
+                }
+            }
+        }
         Action::EditCaptureText => {
             if let Some(path) = BALLOON_IMAGE.with(|c| c.borrow_mut().take()) {
                 spawn_self(&["--edit-raw", &path.display().to_string(), "--select-text"]);
@@ -1350,8 +1607,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     a if a == Action::SaveCapture as usize => run_action(hwnd, Action::SaveCapture, false),
                     a if a == Action::SaveCaptureAs as usize => run_action(hwnd, Action::SaveCaptureAs, false),
                     a if a == Action::EditCaptureText as usize => run_action(hwnd, Action::EditCaptureText, false),
+                    a if a == Action::EditRecording as usize => run_action(hwnd, Action::EditRecording, false),
+                    a if a == Action::RecordingGif as usize => run_action(hwnd, Action::RecordingGif, false),
+                    a if a == Action::CopyRecording as usize => run_action(hwnd, Action::CopyRecording, false),
                     _ => {}
                 }
+            }
+            0
+        }
+        RECORDING_DONE_MSG => {
+            recording_done(hwnd);
+            0
+        }
+        GIF_DONE_MSG => {
+            if let Some(dir) = GIF_PENDING.with(|g| g.borrow_mut().take()) {
+                gif_done(hwnd, dir);
             }
             0
         }

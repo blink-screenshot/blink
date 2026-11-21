@@ -4,6 +4,7 @@
 mod annot;
 mod capture_bar;
 mod changelog;
+mod clip_ui;
 mod config;
 mod editor;
 mod emoji;
@@ -19,6 +20,7 @@ mod imageio;
 mod ocr;
 mod platform;
 mod qr;
+mod rec;
 mod render;
 mod sensitive;
 mod settings_ui;
@@ -98,6 +100,21 @@ fn main() {
             }
             None => Err(i18n::t("Missing file path.").into()),
         },
+        // Screen recording: the recorder (started by the tray), the clip window, "As GIF" from
+        // the notification, and a three-second test recording for new machines.
+        Some("--record") => match arg(1) {
+            Some(p) => platform::run_recorder(std::path::Path::new(p)),
+            None => Err(i18n::t("Missing file path.").into()),
+        },
+        Some("--clip") => match arg(1) {
+            Some(p) => clip_ui::run(std::path::Path::new(p)),
+            None => Err(i18n::t("Missing file path.").into()),
+        },
+        Some("--export-gif") => match arg(1) {
+            Some(p) => platform::export_gif(std::path::Path::new(p)),
+            None => Err(i18n::t("Missing file path.").into()),
+        },
+        Some("--record-test") => platform::record_test(),
         Some("--update") => update_ui::run(),
         Some("--welcome") => welcome_ui::run(),
         Some(p) if !p.starts_with("--") && std::path::Path::new(p).is_file() => {

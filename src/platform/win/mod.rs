@@ -5,6 +5,7 @@ mod http;
 mod kbhook;
 mod ocr;
 mod overlay;
+mod rec;
 mod resident;
 mod scroll;
 mod toast;
@@ -30,6 +31,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 pub use http::http_get;
 pub use ocr::{ocr_engine, open_language_settings};
+pub use rec::{copy_files, export_gif, export_recording, open_video, record_test, run_recorder};
 pub use resident::run_resident;
 
 pub(crate) const RESIDENT_CLASS: &str = "BlinkResidentWindow";

@@ -34,10 +34,12 @@ pub enum Mode {
     /// Copies the text you point at (a line, a paragraph or a dragged region) instead of an
     /// image.
     Text,
+    /// Records a video of the region, window or screen you pick.
+    Record,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 5] = [Mode::Region, Mode::Screen, Mode::AllScreens, Mode::Scroll, Mode::Text];
+    pub const ALL: [Mode; 6] = [Mode::Region, Mode::Screen, Mode::AllScreens, Mode::Scroll, Mode::Text, Mode::Record];
 
     pub fn next(self) -> Mode {
         match self {
@@ -45,7 +47,8 @@ impl Mode {
             Mode::Screen => Mode::AllScreens,
             Mode::AllScreens => Mode::Scroll,
             Mode::Scroll => Mode::Text,
-            Mode::Text => Mode::Region,
+            Mode::Text => Mode::Record,
+            Mode::Record => Mode::Region,
         }
     }
 
@@ -56,12 +59,13 @@ impl Mode {
             Mode::AllScreens => t("All screens"),
             Mode::Scroll => t("Scrolling"),
             Mode::Text => t("Text"),
+            Mode::Record => t("Record"),
         }
     }
 
     /// The key for this mode: F and A capture the screen(s) right away, S switches to
-    /// scrolling capture, T to copying text. Region / window is where the overlay starts, so
-    /// it has none.
+    /// scrolling capture, T to copying text, R to recording. Region / window is where the
+    /// overlay starts, so it has none.
     pub fn key(self) -> Option<&'static str> {
         match self {
             Mode::Region => None,
@@ -69,6 +73,7 @@ impl Mode {
             Mode::AllScreens => Some("A"),
             Mode::Scroll => Some("S"),
             Mode::Text => Some("T"),
+            Mode::Record => Some("R"),
         }
     }
 
@@ -76,6 +81,7 @@ impl Mode {
     pub fn color(self) -> Color32 {
         match self {
             Mode::Scroll => rgb(theme::hex::SIGNAL),
+            Mode::Record => theme::RECORD,
             _ => theme::ACCENT,
         }
     }
@@ -103,6 +109,13 @@ impl Mode {
                 (vec![space], t("next mode")),
                 (vec![esc], t("cancel")),
             ],
+            Mode::Record => vec![
+                (vec![drag], t("region")),
+                (vec![click], t("window")),
+                (vec!["F"], t("whole screen")),
+                (vec![space], t("next mode")),
+                (vec![esc], t("cancel")),
+            ],
             Mode::Text => vec![
                 (vec![click], t("line")),
                 (vec!["Ctrl", click], t("paragraph")),
@@ -123,11 +136,11 @@ pub enum Hit {
     Grip,
 }
 
-const fn rgb(c: u32) -> Color32 {
+pub(crate) const fn rgb(c: u32) -> Color32 {
     Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
 }
 
-fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+pub(crate) fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
 }
@@ -170,12 +183,12 @@ pub fn fonts() -> &'static Fonts {
 }
 
 /// ab_glyph scales by line height; the interface sizes text by em, like egui and GDI.
-fn px_scale(font: &FontArc, em: f32) -> PxScale {
+pub(crate) fn px_scale(font: &FontArc, em: f32) -> PxScale {
     let upem = font.units_per_em().unwrap_or(1000.0);
     PxScale::from(em * font.height_unscaled() / upem)
 }
 
-fn text_width(font: &FontArc, em: f32, s: &str) -> f32 {
+pub(crate) fn text_width(font: &FontArc, em: f32, s: &str) -> f32 {
     let sf = font.as_scaled(px_scale(font, em));
     let mut w = 0.0;
     let mut prev = None;
@@ -191,13 +204,13 @@ fn text_width(font: &FontArc, em: f32, s: &str) -> f32 {
 }
 
 /// Height of a capital letter, to center text on its caps (it then looks centered).
-fn cap_height(font: &FontArc, em: f32) -> f32 {
+pub(crate) fn cap_height(font: &FontArc, em: f32) -> f32 {
     let g = font.glyph_id('H').with_scale_and_position(px_scale(font, em), point(0.0, 0.0));
     font.outline_glyph(g).map_or(em * 0.7, |o| -o.px_bounds().min.y)
 }
 
 /// Draws `s` with its left edge at `x`, vertically centered on `cy`.
-fn draw_text(pix: &mut Pixmap, font: &FontArc, em: f32, x: f32, cy: f32, color: Color32, s: &str) {
+pub(crate) fn draw_text(pix: &mut Pixmap, font: &FontArc, em: f32, x: f32, cy: f32, color: Color32, s: &str) {
     let scale = px_scale(font, em);
     let sf = font.as_scaled(scale);
     let baseline = (cy + cap_height(font, em) / 2.0).round();
@@ -244,23 +257,23 @@ pub struct Area {
 }
 
 impl Area {
-    fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+    pub(crate) fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self { x: x.round(), y: y.round(), w: w.round(), h: h.round() }
     }
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.x && y >= self.y && x < self.x + self.w && y < self.y + self.h
     }
-    fn cy(&self) -> f32 {
+    pub(crate) fn cy(&self) -> f32 {
         self.y + self.h / 2.0
     }
-    fn inset(&self, l: f32, t: f32, r: f32, b: f32) -> Self {
+    pub(crate) fn inset(&self, l: f32, t: f32, r: f32, b: f32) -> Self {
         Self { x: self.x + l, y: self.y + t, w: self.w - l - r, h: self.h - t - b }
     }
 }
 
 /// Rounded rectangle with its own radius per corner (top-left, top-right, bottom-right,
 /// bottom-left).
-fn rrect(a: Area, r: [f32; 4]) -> Option<Path> {
+pub(crate) fn rrect(a: Area, r: [f32; 4]) -> Option<Path> {
     let max = a.w.min(a.h) / 2.0;
     let [tl, tr, br, bl] = r.map(|r| r.clamp(0.0, max));
     let k = 1.0 - 0.552_284_8;
@@ -279,20 +292,20 @@ fn rrect(a: Area, r: [f32; 4]) -> Option<Path> {
     pb.finish()
 }
 
-fn paint(c: Color32, alpha: f32) -> Paint<'static> {
+pub(crate) fn paint(c: Color32, alpha: f32) -> Paint<'static> {
     let mut p = Paint::default();
     p.set_color_rgba8(c.r(), c.g(), c.b(), (alpha * 255.0).round() as u8);
     p.anti_alias = true;
     p
 }
 
-fn fill(pix: &mut Pixmap, path: Option<Path>, c: Color32, alpha: f32) {
+pub(crate) fn fill(pix: &mut Pixmap, path: Option<Path>, c: Color32, alpha: f32) {
     if let Some(path) = path {
         pix.fill_path(&path, &paint(c, alpha), FillRule::Winding, Transform::identity(), None);
     }
 }
 
-fn stroke(pix: &mut Pixmap, path: Option<Path>, c: Color32, width: f32) {
+pub(crate) fn stroke(pix: &mut Pixmap, path: Option<Path>, c: Color32, width: f32) {
     if let Some(path) = path {
         let s = Stroke { width, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Stroke::default() };
         pix.stroke_path(&path, &paint(c, 1.0), &s, Transform::identity(), None);
@@ -300,7 +313,7 @@ fn stroke(pix: &mut Pixmap, path: Option<Path>, c: Color32, width: f32) {
 }
 
 /// A soft shadow under a rounded shape, from a few widening, faint copies of it.
-fn shadow(pix: &mut Pixmap, a: Area, radius: f32, scale: f32) {
+pub(crate) fn shadow(pix: &mut Pixmap, a: Area, radius: f32, scale: f32) {
     for i in 1..=6 {
         let g = i as f32 * 1.7 * scale;
         let s = Area { x: a.x - g, y: a.y - g + 4.0 * scale, w: a.w + 2.0 * g, h: a.h + 2.0 * g };
@@ -315,6 +328,7 @@ enum Icon {
     AllScreens,
     Scroll,
     Text,
+    Record,
     Close,
 }
 
@@ -338,6 +352,7 @@ fn mode_glyph(mode: Mode) -> Icon {
         Mode::AllScreens => Icon::AllScreens,
         Mode::Scroll => Icon::Scroll,
         Mode::Text => Icon::Text,
+        Mode::Record => Icon::Record,
     }
 }
 
@@ -415,6 +430,15 @@ fn icon_weighted(pix: &mut Pixmap, which: Icon, a: Area, c: Color32, bg: Option<
             }
             stroke(pix, pb.finish(), c, width);
             stroke(pix, lines(&[&[(5.8, 5.6), (12.2, 5.6)], &[(9.0, 5.6), (9.0, 12.6)]]), c, width);
+        }
+        Icon::Record => {
+            // A record button: a ring with a dot. The dot is filled, so it reads at small sizes.
+            let mut pb = PathBuilder::new();
+            pb.push_circle(a.x + 9.0 * u, a.y + 9.0 * u, 7.0 * u);
+            stroke(pix, pb.finish(), c, width);
+            let mut pb = PathBuilder::new();
+            pb.push_circle(a.x + 9.0 * u, a.y + 9.0 * u, 3.6 * u);
+            fill(pix, pb.finish(), c, 1.0);
         }
         Icon::Close => {
             stroke(pix, lines(&[&[(5.0, 5.0), (13.0, 13.0)], &[(13.0, 5.0), (5.0, 13.0)]]), c, width * 1.06);
@@ -824,7 +848,7 @@ mod tests {
     #[test]
     fn renders_the_active_mode_in_its_color() {
         let fonts = test_fonts();
-        for mode in [Mode::Region, Mode::Scroll] {
+        for mode in [Mode::Region, Mode::Scroll, Mode::Record] {
             let l = Layout::new(mode, 1.0, &fonts);
             let pix = l.render(None, &fonts).expect("pixmap");
             let seg = l.segments.iter().find(|s| s.mode == mode).unwrap();

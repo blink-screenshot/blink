@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "blink"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "ab_glyph",
  "arboard",
@@ -350,6 +350,7 @@ dependencies = [
  "dirs",
  "eframe",
  "embed-resource",
+ "gif",
  "image",
  "raw-window-handle",
  "resvg",
