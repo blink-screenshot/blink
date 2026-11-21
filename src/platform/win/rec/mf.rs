@@ -8,8 +8,8 @@
 //! and the recorder explains what to install.
 
 use crate::rec::export::VideoSource;
+use crate::rec::yuv::Nv12;
 use core::ffi::c_void;
-use image::RgbaImage;
 use std::path::Path;
 use std::sync::OnceLock;
 use windows::core::{Interface, GUID, HRESULT, PCWSTR, PROPVARIANT};
@@ -132,16 +132,25 @@ fn hns(ms: u32) -> i64 {
 
 // ---- encoding ------------------------------------------------------------------------------
 
-/// Writes H.264 video in an MP4 file, frame by frame, at a constant frame rate.
+/// Sets BT.709 with the studio range on a video type: what `yuv` converts with, so encoder,
+/// decoder and players agree on the colors.
+unsafe fn set_colors(t: &IMFMediaType) {
+    let _ = t.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32);
+    let _ = t.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32);
+    let _ = t.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32);
+    let _ = t.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709.0 as u32);
+}
+
+/// Writes H.264 video in an MP4 file from NV12 frames. The frames go to the encoder as they
+/// are: no color conversion in Media Foundation (which does it on one core).
 pub struct Mp4Writer {
     writer: IMFSinkWriter,
     stream: u32,
     mf: &'static Mf,
-    /// Size of the video (even numbers; the source may be one pixel larger).
+    /// Size of the video (even numbers).
     pub w: u32,
     pub h: u32,
     fps: u32,
-    buf: Vec<u8>,
     last: Option<u32>,
     finished: bool,
 }
@@ -150,8 +159,8 @@ pub struct Mp4Writer {
 unsafe impl Send for Mp4Writer {}
 
 impl Mp4Writer {
-    /// A new MP4 at `path` for frames of `w` x `h` (made even by dropping the last column or
-    /// row), at `fps`, `bitrate` bits per second and a key frame every `key_every` frames.
+    /// A new MP4 at `path` for frames of `w` x `h` (made even), at `fps`, `bitrate` bits per
+    /// second and a key frame every `key_every` frames.
     pub fn create(path: &Path, w: u32, h: u32, fps: u32, bitrate: u32, key_every: u32) -> Result<Self, MfError> {
         let mf = Mf::get()?;
         let (w, h) = (w & !1, h & !1);
@@ -179,6 +188,7 @@ impl Mp4Writer {
             set(out.SetUINT64(&MF_MT_FRAME_RATE, pack(fps, 1)))?;
             set(out.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1)))?;
             set(out.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32))?;
+            set_colors(&out);
             // Not every encoder reads this; the codec API below is the other way to say it.
             let _ = out.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, key_every);
             let stream = writer.AddStream(&out).map_err(|e| failed("AddStream", e))?;
@@ -186,14 +196,13 @@ impl Mp4Writer {
             let input = mf.media_type()?;
             let set = |r: windows::core::Result<()>| r.map_err(|e| failed("input type", e));
             set(input.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video))?;
-            set(input.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32))?;
+            set(input.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12))?;
             set(input.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32))?;
             set(input.SetUINT64(&MF_MT_FRAME_SIZE, pack(w, h)))?;
             set(input.SetUINT64(&MF_MT_FRAME_RATE, pack(fps, 1)))?;
             set(input.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1)))?;
-            // A positive stride: the rows are top-down. Without it RGB counts as bottom-up
-            // and the video comes out upside down.
-            set(input.SetUINT32(&MF_MT_DEFAULT_STRIDE, w * 4))?;
+            set(input.SetUINT32(&MF_MT_DEFAULT_STRIDE, w))?;
+            set_colors(&input);
             writer.SetInputMediaType(stream, &input, None).map_err(|e| failed("SetInputMediaType", e))?;
 
             // Key frames often enough to seek quickly in the clip window.
@@ -204,50 +213,37 @@ impl Mp4Writer {
                 let _ = api.SetValue(&CODECAPI_AVEncMPVGOPSize, &windows::core::VARIANT::from(key_every));
             }
             writer.BeginWriting().map_err(|e| failed("BeginWriting", e))?;
-            Ok(Mp4Writer { writer, stream, mf, w, h, fps: fps.max(1), buf: Vec::new(), last: None, finished: false })
+            Ok(Mp4Writer { writer, stream, mf, w, h, fps: fps.max(1), last: None, finished: false })
         }
     }
 
-    /// Writes one frame (top-down BGRA rows of `stride` bytes, at least `w` x `h`) shown from
-    /// `t` ms until the next frame.
-    pub fn write_bgra(&mut self, data: &[u8], stride: usize, t: u32) -> Result<(), MfError> {
-        let row = self.w as usize * 4;
-        self.buf.clear();
-        for y in 0..self.h as usize {
-            let start = y * stride;
-            let Some(src) = data.get(start..start + row) else { return Err(MfError::Failed("frame too small".into())) };
-            self.buf.extend_from_slice(src);
-        }
-        self.write_buf(t)
-    }
-
-    /// Writes one RGBA frame (at least `w` x `h`).
-    pub fn write_rgba(&mut self, img: &RgbaImage, t: u32) -> Result<(), MfError> {
-        if img.width() < self.w || img.height() < self.h {
-            return Err(MfError::Failed("frame too small".into()));
-        }
-        self.buf.clear();
-        let stride = img.width() as usize * 4;
-        let raw = img.as_raw();
-        for y in 0..self.h as usize {
-            for p in raw[y * stride..y * stride + self.w as usize * 4].chunks_exact(4) {
-                self.buf.extend_from_slice(&[p[2], p[1], p[0], 255]);
-            }
-        }
-        self.write_buf(t)
-    }
-
-    fn write_buf(&mut self, t: u32) -> Result<(), MfError> {
+    /// Writes one frame (at least `w` x `h`; a larger one is cut), shown from `t` ms.
+    pub fn write(&mut self, frame: &Nv12, t: u32) -> Result<(), MfError> {
         // Samples must move forward in time.
         if self.last.is_some_and(|l| t <= l) {
             return Ok(());
         }
+        if frame.w < self.w || frame.h < self.h {
+            return Err(MfError::Failed("frame too small".into()));
+        }
+        let (w, h, fw) = (self.w as usize, self.h as usize, frame.w as usize);
         unsafe {
-            let len = self.buf.len() as u32;
+            let len = (w * h * 3 / 2) as u32;
             let buffer = self.mf.memory_buffer(len)?;
             let mut p: *mut u8 = std::ptr::null_mut();
             buffer.Lock(&mut p, None, None).map_err(|e| failed("Lock", e))?;
-            std::ptr::copy_nonoverlapping(self.buf.as_ptr(), p, self.buf.len());
+            let dst = std::slice::from_raw_parts_mut(p, len as usize);
+            if fw == w {
+                dst[..w * h].copy_from_slice(&frame.y[..w * h]);
+                dst[w * h..].copy_from_slice(&frame.uv[..w * h / 2]);
+            } else {
+                for row in 0..h {
+                    dst[row * w..(row + 1) * w].copy_from_slice(&frame.y[row * fw..row * fw + w]);
+                }
+                for row in 0..h / 2 {
+                    dst[w * h + row * w..w * h + (row + 1) * w].copy_from_slice(&frame.uv[row * fw..row * fw + w]);
+                }
+            }
             buffer.Unlock().map_err(|e| failed("Unlock", e))?;
             buffer.SetCurrentLength(len).map_err(|e| failed("SetCurrentLength", e))?;
             let sample = self.mf.sample()?;
@@ -284,8 +280,8 @@ pub struct Mp4Sink {
 }
 
 impl crate::rec::export::FrameSink for Mp4Sink {
-    fn push(&mut self, frame: &RgbaImage, t: u32) -> Result<(), String> {
-        self.writer.write_rgba(frame, t).map_err(|e| e.to_string())
+    fn push(&mut self, frame: &Nv12, t: u32) -> Result<(), String> {
+        self.writer.write(frame, t).map_err(|e| e.to_string())
     }
     fn finish(&mut self, _end: u32) -> Result<u64, String> {
         self.writer.finish().map_err(|e| e.to_string())?;
@@ -295,17 +291,18 @@ impl crate::rec::export::FrameSink for Mp4Sink {
 
 // ---- decoding ------------------------------------------------------------------------------
 
-/// Reads the frames of a video file as RGBA.
+/// Reads the frames of a video file as NV12, the decoder's own format (no conversion).
 pub struct Mp4Reader {
     reader: IMFSourceReader,
     /// The size the video should have, when known (the decoder may pad it).
     expected: Option<(u32, u32)>,
+    /// The visible size (even).
     w: u32,
     h: u32,
-    /// Size of the decoded frames (may be padded, e.g. 1088 rows for 1080).
+    /// Rows of the decoded frames (may be padded, e.g. 1088 for 1080).
     frame_h: u32,
-    /// Bytes from one row to the next; negative for bottom-up rows.
-    stride: i32,
+    /// Bytes from one row to the next, from the media type.
+    stride: u32,
     duration: u32,
 }
 
@@ -320,7 +317,7 @@ impl Mp4Reader {
         let mf = Mf::get()?;
         unsafe {
             let attrs = mf.attributes(1)?;
-            // Lets the reader convert the decoder's YUV to RGB32.
+            // Lets the reader convert, should a decoder not give NV12 itself.
             attrs.SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1).map_err(|e| failed("attributes", e))?;
             let url = wide(&path.display().to_string());
             let mut p = std::ptr::null_mut();
@@ -332,7 +329,7 @@ impl Mp4Reader {
             reader.SetStreamSelection(FIRST_VIDEO, true).map_err(|e| failed("SetStreamSelection", e))?;
             let t = mf.media_type()?;
             t.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(|e| failed("type", e))?;
-            t.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32).map_err(|e| failed("type", e))?;
+            t.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12).map_err(|e| failed("type", e))?;
             reader.SetCurrentMediaType(FIRST_VIDEO, None, &t).map_err(|e| failed("SetCurrentMediaType", e))?;
             let duration = reader
                 .GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE.0 as u32, &MF_PD_DURATION)
@@ -351,8 +348,7 @@ impl Mp4Reader {
         let cur = self.reader.GetCurrentMediaType(FIRST_VIDEO).map_err(|e| failed("GetCurrentMediaType", e))?;
         let fs = cur.GetUINT64(&MF_MT_FRAME_SIZE).map_err(|e| failed("frame size", e))?;
         let (frame_w, frame_h) = ((fs >> 32) as u32, fs as u32);
-        // Without the attribute, RGB rows are bottom-up (the bitmap convention).
-        self.stride = cur.GetUINT32(&MF_MT_DEFAULT_STRIDE).map(|s| s as i32).unwrap_or(-(frame_w as i32 * 4));
+        self.stride = cur.GetUINT32(&MF_MT_DEFAULT_STRIDE).map(|s| (s as i32).unsigned_abs()).unwrap_or(frame_w);
         // The visible part: the display aperture, else the size we expect, else all.
         let mut area = MFVideoArea::default();
         let blob = std::slice::from_raw_parts_mut(
@@ -368,16 +364,12 @@ impl Mp4Reader {
             w = w.min(ew);
             h = h.min(eh);
         }
-        (self.w, self.h, self.frame_h) = (w, h, frame_h);
+        (self.w, self.h, self.frame_h) = (w & !1, h & !1, frame_h);
         Ok(())
     }
 }
 
 impl VideoSource for Mp4Reader {
-    fn size(&self) -> (u32, u32) {
-        (self.w, self.h)
-    }
-
     fn duration(&self) -> u32 {
         self.duration
     }
@@ -387,7 +379,7 @@ impl VideoSource for Mp4Reader {
         unsafe { self.reader.SetCurrentPosition(&GUID::zeroed(), &pos) }.map_err(|e| failed("seek", e).to_string())
     }
 
-    fn next(&mut self) -> Result<Option<(u32, RgbaImage)>, String> {
+    fn next(&mut self) -> Result<Option<(u32, Nv12)>, String> {
         loop {
             let mut flags = 0u32;
             let mut time = 0i64;
@@ -405,58 +397,69 @@ impl VideoSource for Mp4Reader {
             }
             let Some(sample) = sample else { continue };
             let t = (time.max(0) / 10_000) as u32;
-            return unsafe { self.frame(&sample) }.map(|img| Some((t, img)));
+            return unsafe { self.frame(&sample) }.map(|f| Some((t, f)));
         }
     }
 }
 
 impl Mp4Reader {
-    unsafe fn frame(&self, sample: &IMFSample) -> Result<RgbaImage, String> {
-        // One buffer is the rule for video; a 2D buffer knows its real pitch and which row
-        // comes first.
+    unsafe fn frame(&self, sample: &IMFSample) -> Result<Nv12, String> {
         let single = sample.GetBufferCount().map(|n| n == 1).unwrap_or(false);
         let buffer = if single { sample.GetBufferByIndex(0) } else { sample.ConvertToContiguousBuffer() }
             .map_err(|e| failed("buffer", e).to_string())?;
-        if let Ok(b2) = buffer.cast::<IMF2DBuffer>() {
-            let mut p: *mut u8 = std::ptr::null_mut();
-            let mut pitch = 0i32;
-            if b2.Lock2D(&mut p, &mut pitch).is_ok() {
-                let img = self.copy(p, pitch, None);
+        // A 2D buffer tells the real pitch and length; the color plane follows the brightness
+        // plane at pitch x (allocated rows), which can be more than the visible rows.
+        if let Ok(b2) = buffer.cast::<IMF2DBuffer2>() {
+            let (mut scan0, mut pitch, mut start, mut len) = (std::ptr::null_mut(), 0i32, std::ptr::null_mut(), 0u32);
+            if b2.Lock2DSize(MF2DBuffer_LockFlags_Read, &mut scan0, &mut pitch, &mut start, &mut len).is_ok() {
+                let f = if pitch > 0 {
+                    let rows = self.rows(pitch as usize, len as usize);
+                    self.copy(scan0, pitch as usize, rows, len as usize)
+                } else {
+                    Err("bottom-up NV12".to_string())
+                };
                 let _ = b2.Unlock2D();
-                return img;
+                return f;
             }
         }
         let mut p: *mut u8 = std::ptr::null_mut();
         let mut len = 0u32;
         buffer.Lock(&mut p, None, Some(&mut len)).map_err(|e| failed("Lock", e).to_string())?;
-        let rows = self.frame_h.max(self.h) as usize;
-        let need = self.stride.unsigned_abs() as usize * rows;
-        let img = if (len as usize) < need {
-            Err("decoded frame is smaller than expected".to_string())
-        } else if self.stride < 0 {
-            // Bottom-up: the top row is the last in memory.
-            let start = p.add((rows - 1) * self.stride.unsigned_abs() as usize);
-            self.copy(start, self.stride, Some(len as usize))
-        } else {
-            self.copy(p, self.stride, Some(len as usize))
-        };
+        let pitch = self.stride.max(self.w) as usize;
+        let rows = self.rows(pitch, len as usize);
+        let f = self.copy(p, pitch, rows, len as usize);
         let _ = buffer.Unlock();
-        img
+        f
     }
 
-    /// Copies the visible part of a BGRA(X) frame whose top row starts at `row0`, `pitch`
-    /// bytes from row to row, into RGBA.
-    unsafe fn copy(&self, row0: *const u8, pitch: i32, _len: Option<usize>) -> Result<RgbaImage, String> {
-        if pitch.unsigned_abs() < self.w * 4 {
-            return Err("decoded frame has an unexpected size".into());
+    /// How many rows the brightness plane has in memory: the decoded frame height (often
+    /// padded, 1088 for 1080) when the buffer is that large, else what the length says.
+    fn rows(&self, pitch: usize, len: usize) -> usize {
+        let fh = self.frame_h as usize;
+        if fh >= self.h as usize && pitch * fh * 3 / 2 <= len {
+            fh
+        } else {
+            (len * 2 / 3) / pitch.max(1)
         }
-        let mut out = Vec::with_capacity((self.w * self.h * 4) as usize);
-        for y in 0..self.h as isize {
-            let row = std::slice::from_raw_parts(row0.offset(y * pitch as isize), self.w as usize * 4);
-            for px in row.chunks_exact(4) {
-                out.extend_from_slice(&[px[2], px[1], px[0], 255]);
-            }
+    }
+
+    /// Copies the visible part of an NV12 frame (`pitch` bytes per row, `rows` allocated rows
+    /// before the color plane, `len` bytes in all).
+    unsafe fn copy(&self, base: *const u8, pitch: usize, rows: usize, len: usize) -> Result<Nv12, String> {
+        let (w, h) = (self.w as usize, self.h as usize);
+        if pitch < w || rows < h || pitch * rows + pitch * (h / 2) > len {
+            return Err(format!("decoded frame has an unexpected layout ({pitch} x {rows}, {len} bytes)"));
         }
-        RgbaImage::from_raw(self.w, self.h, out).ok_or_else(|| "frame".to_string())
+        let data = std::slice::from_raw_parts(base, len);
+        let mut out =
+            Nv12 { w: w as u32, h: h as u32, y: Vec::with_capacity(w * h), uv: Vec::with_capacity(w * h / 2) };
+        for row in 0..h {
+            out.y.extend_from_slice(&data[row * pitch..row * pitch + w]);
+        }
+        let uv0 = pitch * rows;
+        for row in 0..h / 2 {
+            out.uv.extend_from_slice(&data[uv0 + row * pitch..uv0 + row * pitch + w]);
+        }
+        Ok(out)
     }
 }

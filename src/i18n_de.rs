@@ -591,4 +591,8 @@ pub const DE: &[(&str, &str)] = &[
     ("{0}\nClick to open it in the clip window and try again.", "{0}\nKlicken, um es im Clip-Fenster zu öffnen und es erneut zu versuchen."),
     ("{0}\nDetails are in recorder.log.", "{0}\nDetails stehen in recorder.log."),
     ("The recording could not be opened.", "Das Video konnte nicht geöffnet werden."),
+    ("Video size", "Videogröße"),
+    ("Half on sharp screens", "Halb auf scharfen Bildschirmen"),
+    ("Saves in {0}", "Speichert in {0}"),
+    ("On a screen at 200% scaling or more (such as a 4K laptop), half size looks like the same screen at 100%: text stays readable, files are four times smaller, and recording and saving are much faster. Full resolution keeps every pixel, at the cost of size and speed. Other screens are always recorded at full resolution.", "Auf einem Bildschirm mit 200 % Skalierung oder mehr (etwa einem 4K-Laptop) sieht die halbe Größe aus wie derselbe Bildschirm bei 100 %: Text bleibt lesbar, Dateien sind viermal kleiner, und Aufzeichnen und Speichern gehen viel schneller. Volle Auflösung behält jedes Pixel, auf Kosten von Größe und Tempo. Andere Bildschirme werden immer in voller Auflösung aufgezeichnet."),
 ];

@@ -1,28 +1,27 @@
-//! Turning a recording into a video or a GIF: trim, draw the pointer, clicks and keys, scale
-//! and change the frame rate. The decoder (`VideoSource`) and the encoder (`FrameSink`) are
-//! traits: on Windows they are Media Foundation, the GIF encoder is portable, and the tests
-//! use frames in memory.
+//! Turning a recording into a video or a GIF: trim, draw the pointer, clicks and keys, and
+//! change the frame rate. The decoder (`VideoSource`) and the encoder (`FrameSink`) are traits:
+//! on Windows they are Media Foundation, the GIF encoder is portable (and scales the frames
+//! down itself), and the tests use frames in memory. Frames stay in NV12 throughout (see
+//! `yuv`): only the areas the overlays cover are converted to RGB and back.
 
 use super::compose::{self, Cursors, Overlays, Style};
 use super::events::Log;
+use super::yuv::Nv12;
 use crate::capture_bar::Fonts;
-use image::RgbaImage;
 
 /// Frames of a video, in order.
 pub trait VideoSource {
-    /// Size of the frames.
-    fn size(&self) -> (u32, u32);
     /// Length in ms.
     fn duration(&self) -> u32;
     /// Goes to `ms`: the next `next` returns the frame shown at `ms` or one before it.
     fn seek(&mut self, ms: u32) -> Result<(), String>;
     /// The next frame and its time in ms, or `None` at the end.
-    fn next(&mut self) -> Result<Option<(u32, RgbaImage)>, String>;
+    fn next(&mut self) -> Result<Option<(u32, Nv12)>, String>;
 }
 
 /// Receives the output frames, with their time from the start of the output.
 pub trait FrameSink {
-    fn push(&mut self, frame: &RgbaImage, t: u32) -> Result<(), String>;
+    fn push(&mut self, frame: &Nv12, t: u32) -> Result<(), String>;
     /// The output ends at `end` ms. Returns its size in bytes.
     fn finish(&mut self, end: u32) -> Result<u64, String>;
 }
@@ -77,10 +76,10 @@ impl Clip {
     }
 
     /// `frame` (at time `t` of the recording) with the overlays drawn on it.
-    pub fn compose(&self, frame: &mut RgbaImage, t: u32, overlays: &Overlays, fonts: &Fonts) {
+    pub fn compose(&self, frame: &mut Nv12, t: u32, overlays: &Overlays, fonts: &Fonts) {
         if overlays.any() {
             let f = self.log.frame_at(t);
-            compose::draw(frame, &f, &self.cursors, overlays, &self.style(), fonts);
+            compose::draw_nv12(frame, &f, &self.cursors, overlays, &self.style(), fonts);
         }
     }
 }
@@ -92,8 +91,6 @@ pub struct Job {
     pub overlays: Overlays,
     /// Frames per second of the output.
     pub fps: u32,
-    /// Scale down to at most this width (keeping the aspect ratio).
-    pub max_width: Option<u32>,
 }
 
 /// Size of the output frames for a source of `w` x `h`.
@@ -104,8 +101,8 @@ pub fn output_size(w: u32, h: u32, max_width: Option<u32>) -> (u32, u32) {
     }
 }
 
-/// Runs `job`: reads `src`, draws the overlays, scales, and feeds `sink`. `progress` gets
-/// 0..1 and returns false to cancel. Returns the size of the output in bytes.
+/// Runs `job`: reads `src`, draws the overlays and feeds `sink`. `progress` gets 0..1 and
+/// returns false to cancel. Returns the size of the output in bytes.
 pub fn export(
     src: &mut dyn VideoSource,
     clip: &Clip,
@@ -116,13 +113,12 @@ pub fn export(
 ) -> Result<u64, String> {
     let trim = job.trim.clamped(src.duration());
     let fps = job.fps.clamp(1, 60);
-    let (w, h) = src.size();
-    let (ow, oh) = output_size(w, h, job.max_width);
     src.seek(trim.start)?;
     // The frame shown now, and the one after it.
-    let mut current: Option<(u32, RgbaImage)> = None;
-    let mut ahead: Option<(u32, RgbaImage)> = None;
+    let mut current: Option<(u32, Nv12)> = None;
+    let mut ahead: Option<(u32, Nv12)> = None;
     let mut ended = false;
+    let mut out = Nv12::default();
     let mut k: u64 = 0;
     loop {
         let out_t = (k * 1000 / fps as u64) as u32;
@@ -144,11 +140,8 @@ pub fn export(
             }
         }
         let Some((_, frame)) = &current else { break };
-        let mut out = frame.clone();
+        out.clone_from(frame);
         clip.compose(&mut out, t, &job.overlays, fonts);
-        if (ow, oh) != (w, h) {
-            out = image::imageops::resize(&out, ow, oh, image::imageops::FilterType::Triangle);
-        }
         sink.push(&out, out_t)?;
         k += 1;
         if !progress(out_t as f32 / trim.len().max(1) as f32) {
@@ -182,47 +175,48 @@ pub fn estimate_mp4(w: u32, h: u32, fps: u32, ms: u32) -> u64 {
     mp4_bitrate(w, h, fps) as u64 * ms as u64 / 8000 + 4096
 }
 
-/// What a GIF of `job` would take: (bytes of its first frame, bytes of the rest).
+/// What a GIF of `job` would take: (bytes of its first frame with the header, bytes of the
+/// rest), in one pass.
 fn gif_bytes(
     src: &mut dyn VideoSource,
     clip: &Clip,
     job: &Job,
+    max_width: Option<u32>,
     fonts: &Fonts,
     cancel: &dyn Fn() -> bool,
 ) -> Result<(u64, u64), String> {
-    let one = Job { trim: Trim { start: job.trim.start, end: job.trim.start + 1000 / job.fps.max(1) }, ..*job };
-    let mut sink = super::gif::GifSink::new(std::io::sink());
-    let first = export(src, clip, &one, &mut sink, fonts, &mut |_| !cancel())?;
-    let mut sink = super::gif::GifSink::new(std::io::sink());
+    let mut sink = super::gif::GifSink::new(std::io::sink()).max_width(max_width);
     let total = export(src, clip, job, &mut sink, fonts, &mut |_| !cancel())?;
-    Ok((first, total.saturating_sub(first)))
+    let first = sink.first_frame_bytes().unwrap_or(total).min(total);
+    Ok((first, total - first))
 }
 
 /// Expected size of a GIF export in bytes. Short clips are encoded whole (exact); for longer
-/// ones three stretches of two seconds are encoded and the rest is extrapolated: the first
+/// ones two stretches of two seconds are encoded and the rest is extrapolated: the first
 /// frame is whole, every later one only holds what changed, so the cost per second of the
 /// later frames is what scales with the length.
 pub fn estimate_gif(
     src: &mut dyn VideoSource,
     clip: &Clip,
     job: &Job,
+    max_width: Option<u32>,
     fonts: &Fonts,
     cancel: &dyn Fn() -> bool,
 ) -> Result<u64, String> {
     const SAMPLE: u32 = 2000;
     let trim = job.trim.clamped(src.duration());
     let job = Job { trim, ..*job };
-    if trim.len() <= 3 * SAMPLE + 1000 {
-        let mut sink = super::gif::GifSink::new(std::io::sink());
+    if trim.len() <= 2 * SAMPLE + 1000 {
+        let mut sink = super::gif::GifSink::new(std::io::sink()).max_width(max_width);
         return export(src, clip, &job, &mut sink, fonts, &mut |_| !cancel());
     }
     let mut firsts = Vec::new();
     let mut rest_bytes = 0u64;
     let mut rest_ms = 0u64;
-    for frac in [0.1f64, 0.45, 0.8] {
+    for frac in [0.2f64, 0.7] {
         let start = trim.start + ((trim.len() - SAMPLE) as f64 * frac) as u32;
         let part = Job { trim: Trim { start, end: start + SAMPLE }, ..job };
-        let (first, rest) = gif_bytes(src, clip, &part, fonts, cancel)?;
+        let (first, rest) = gif_bytes(src, clip, &part, max_width, fonts, cancel)?;
         firsts.push(first);
         rest_bytes += rest;
         rest_ms += (SAMPLE - 1000 / job.fps.max(1)) as u64;
@@ -258,16 +252,13 @@ pub fn human_duration(ms: u32) -> String {
 /// Frames in memory, for tests.
 #[cfg(test)]
 pub struct MemorySource {
-    pub frames: Vec<(u32, RgbaImage)>,
+    pub frames: Vec<(u32, Nv12)>,
     pub duration: u32,
     pub pos: usize,
 }
 
 #[cfg(test)]
 impl VideoSource for MemorySource {
-    fn size(&self) -> (u32, u32) {
-        self.frames.first().map_or((0, 0), |f| f.1.dimensions())
-    }
     fn duration(&self) -> u32 {
         self.duration
     }
@@ -277,7 +268,7 @@ impl VideoSource for MemorySource {
         self.pos = i.saturating_sub(2);
         Ok(())
     }
-    fn next(&mut self) -> Result<Option<(u32, RgbaImage)>, String> {
+    fn next(&mut self) -> Result<Option<(u32, Nv12)>, String> {
         let f = self.frames.get(self.pos).cloned();
         self.pos += 1;
         Ok(f)
@@ -289,6 +280,7 @@ mod tests {
     use super::*;
     use crate::rec::events::{Event, Header, Kind, VERSION};
     use crate::rec::keys::KeyMode;
+    use image::RgbaImage;
 
     /// Frame `i` is filled with gray level `i` (so each output frame tells which source frame
     /// it came from) and has a square that moves.
@@ -302,11 +294,16 @@ mod tests {
                         img.put_pixel(xx, y, image::Rgba([240, 200, 40, 255]));
                     }
                 }
-                (i * 1000 / fps, img)
+                (i * 1000 / fps, Nv12::from_rgba(&img))
             })
             .collect::<Vec<_>>();
         let duration = frames.len() as u32 * 1000 / fps;
         MemorySource { frames, duration, pos: 0 }
+    }
+
+    /// The index of the source frame `f` is.
+    fn which(src: &MemorySource, f: &Nv12) -> usize {
+        src.frames.iter().position(|(_, s)| s == f).expect("a source frame")
     }
 
     /// Like a screen: a detailed background that stands still, a pointer-sized square that
@@ -333,7 +330,7 @@ mod tests {
                         img.put_pixel(x, y, image::Rgba([20, 20, 20, 255]));
                     }
                 }
-                (t, img)
+                (t, Nv12::from_rgba(&img))
             })
             .collect::<Vec<_>>();
         let duration = frames.len() as u32 * 1000 / fps;
@@ -345,9 +342,9 @@ mod tests {
         Clip { log: Log { header, events }, cursors: Cursors::default() }
     }
 
-    struct Collect(Vec<(u32, RgbaImage)>, Option<u32>);
+    struct Collect(Vec<(u32, Nv12)>, Option<u32>);
     impl FrameSink for Collect {
-        fn push(&mut self, frame: &RgbaImage, t: u32) -> Result<(), String> {
+        fn push(&mut self, frame: &Nv12, t: u32) -> Result<(), String> {
             self.0.push((t, frame.clone()));
             Ok(())
         }
@@ -358,7 +355,7 @@ mod tests {
     }
 
     fn job(start: u32, end: u32, fps: u32) -> Job {
-        Job { trim: Trim { start, end }, overlays: Overlays::none(), fps, max_width: None }
+        Job { trim: Trim { start, end }, overlays: Overlays::none(), fps }
     }
 
     fn run(src: &mut MemorySource, j: &Job) -> Collect {
@@ -375,8 +372,8 @@ mod tests {
         assert_eq!(out.1, Some(1000));
         // Times start at 0; the first frame is source frame 30 (at 1 s), the last 59.
         assert_eq!(out.0[0].0, 0);
-        assert_eq!(out.0[0].1.get_pixel(0, 0)[0], 30);
-        assert_eq!(out.0[29].1.get_pixel(0, 0)[0], 59);
+        assert_eq!(which(&src, &out.0[0].1), 30);
+        assert_eq!(which(&src, &out.0[29].1), 59);
     }
 
     #[test]
@@ -387,14 +384,14 @@ mod tests {
         // Output frame k at k/12 s shows the last source frame at or before it.
         for (k, (t, f)) in out.0.iter().enumerate() {
             assert_eq!(*t, k as u32 * 1000 / 12);
-            let want = (0..60u32).filter(|i| i * 1000 / 30 <= *t).last().unwrap() as u8;
-            assert_eq!(f.get_pixel(0, 0)[0], want, "frame {k}");
+            let want = (0..60u32).filter(|i| i * 1000 / 30 <= *t).last().unwrap() as usize;
+            assert_eq!(which(&src, f), want, "frame {k}");
         }
         // Higher than the source: frames are held.
         let mut src = source(15, 15);
         let out = run(&mut src, &job(0, 1000, 30));
         assert_eq!(out.0.len(), 30);
-        assert_eq!(out.0[0].1.get_pixel(0, 0)[0], out.0[1].1.get_pixel(0, 0)[0]);
+        assert_eq!(out.0[0].1, out.0[1].1);
     }
 
     #[test]
@@ -407,13 +404,17 @@ mod tests {
     }
 
     #[test]
-    fn scales_down_to_the_maximum_width() {
+    fn gifs_are_scaled_down_to_the_maximum_width() {
         assert_eq!(output_size(1920, 1080, Some(960)), (960, 540));
         assert_eq!(output_size(800, 600, Some(960)), (800, 600));
         assert_eq!(output_size(1000, 3, Some(10)), (10, 1));
         let mut src = source(10, 30);
-        let out = run(&mut src, &Job { max_width: Some(160), ..job(0, 300, 30) });
-        assert_eq!(out.0[0].1.dimensions(), (160, 90));
+        let mut sink = crate::rec::gif::GifSink::new(Vec::new()).max_width(Some(160));
+        export(&mut src, &clip(vec![]), &job(0, 300, 30), &mut sink, crate::capture_bar::fonts(), &mut |_| true)
+            .unwrap();
+        let data = sink.into_output().unwrap();
+        let dec = ::gif::DecodeOptions::new().read_info(&data[..]).unwrap();
+        assert_eq!((dec.width(), dec.height()), (160, 90));
     }
 
     #[test]
@@ -426,7 +427,9 @@ mod tests {
         let mut out = Collect(Vec::new(), None);
         let j = Job { overlays: Overlays::default(), ..job(0, 2000, 10) };
         export(&mut src, &clip(events), &j, &mut out, crate::capture_bar::fonts(), &mut |_| true).unwrap();
-        let ring_at = |i: usize| out.0[i].1.get_pixel(160, 20)[0] != i as u8 * 3;
+        // Output frame i (at i/10 s) is source frame 3i, with or without a ring on it.
+        let ring_at =
+            |i: usize| out.0[i].1.region_to_rgba(160, 20, 2, 2) != src.frames[i * 3].1.region_to_rgba(160, 20, 2, 2);
         assert!(!ring_at(4), "before the click");
         assert!(ring_at(5) && ring_at(6), "during the click");
         assert!(!ring_at(10), "after it");
@@ -450,16 +453,17 @@ mod tests {
         let fonts = crate::capture_bar::fonts();
         // 20 s at 15 fps: long enough to be sampled.
         let mut src = screen_like(300, 15);
-        let j = Job { trim: Trim::whole(20_000), overlays: Overlays::none(), fps: 12, max_width: Some(320) };
-        let estimate = estimate_gif(&mut src, &clip(vec![]), &j, fonts, &|| false).unwrap();
-        let mut sink = crate::rec::gif::GifSink::new(Vec::new());
+        let j = Job { trim: Trim::whole(20_000), overlays: Overlays::none(), fps: 12 };
+        let w = Some(320);
+        let estimate = estimate_gif(&mut src, &clip(vec![]), &j, w, fonts, &|| false).unwrap();
+        let mut sink = crate::rec::gif::GifSink::new(Vec::new()).max_width(w);
         let real = export(&mut src, &clip(vec![]), &j, &mut sink, fonts, &mut |_| true).unwrap();
         let ratio = estimate as f64 / real as f64;
         assert!((0.75..=1.33).contains(&ratio), "estimate {estimate}, real {real}");
         // A short clip is encoded whole: exact.
         let short = Job { trim: Trim { start: 0, end: 3000 }, ..j };
-        let estimate = estimate_gif(&mut src, &clip(vec![]), &short, fonts, &|| false).unwrap();
-        let mut sink = crate::rec::gif::GifSink::new(Vec::new());
+        let estimate = estimate_gif(&mut src, &clip(vec![]), &short, w, fonts, &|| false).unwrap();
+        let mut sink = crate::rec::gif::GifSink::new(Vec::new()).max_width(w);
         let real = export(&mut src, &clip(vec![]), &short, &mut sink, fonts, &mut |_| true).unwrap();
         assert_eq!(estimate, real);
     }
