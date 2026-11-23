@@ -79,6 +79,7 @@ The repository is public, so the check needs no token or account. GitHub allows 
 | `src/platform/win/overlay.rs` | selection overlay over all monitors, window snapping, magnifier |
 | `src/capture_bar.rs` | the mode bar of the overlay (portable, previewable) |
 | `src/platform/win/capture.rs` | screen capture (GDI), window enumeration, DWM bounds |
+| `src/hdr.rs`, `src/platform/win/hdr.rs` | experimental HDR screenshots: which monitors have HDR on, reading them as scRGB (DXGI) and tone mapping to 8-bit sRGB (tested); `%LOCALAPPDATA%\Blink\hdr.log` says what happened per monitor |
 | `src/platform/win/scroll.rs` | scrolling capture |
 | `src/stitch.rs` | stitching scroll frames (tested) |
 | `src/ocr.rs`, `src/platform/win/ocr.rs` | reading text: the Windows OCR engine, enlarging small text, reading tall images in bands, selecting words / lines / paragraphs (tested) |

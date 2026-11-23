@@ -5,6 +5,9 @@
 //! Explorer). It cannot work for content that changes while scrolling (videos, animated
 //! headers, lazy-loading placeholders); the stitcher stops cleanly when frames no longer
 //! line up and returns what it has so far.
+//!
+//! Frames are never tone mapped for HDR screens (the experimental setting): reading the
+//! screen as HDR for every scroll step would make each step much slower.
 
 use super::capture::{grab_rgba, IRect};
 use crate::config::Config;
@@ -45,10 +48,10 @@ fn escape_pressed() -> bool {
 fn settled_frame(rect: IRect, delay: Duration) -> Option<RgbaImage> {
     let start = Instant::now();
     std::thread::sleep(delay);
-    let mut prev = grab_rgba(rect)?;
+    let mut prev = grab_rgba(rect, false)?;
     loop {
         std::thread::sleep(Duration::from_millis(40));
-        let cur = grab_rgba(rect)?;
+        let cur = grab_rgba(rect, false)?;
         if cur == prev || nearly_equal(&cur, &prev) || start.elapsed() > Duration::from_millis(1500) {
             return Some(cur);
         }
@@ -58,7 +61,7 @@ fn settled_frame(rect: IRect, delay: Duration) -> Option<RgbaImage> {
 
 pub fn capture(rect: IRect, cfg: &Config) -> Option<RgbaImage> {
     if rect.w < 40 || rect.h < 40 {
-        return grab_rgba(rect);
+        return grab_rgba(rect, false);
     }
     let delay = Duration::from_millis(cfg.scroll_delay_ms.clamp(30, 2000) as u64);
     // Keep the pointer near the right edge (scrollbar area) to avoid hover effects.
@@ -70,7 +73,7 @@ pub fn capture(rect: IRect, cfg: &Config) -> Option<RgbaImage> {
     std::thread::sleep(Duration::from_millis(120));
 
     // Scroll to the top first.
-    let mut before = grab_rgba(rect)?;
+    let mut before = grab_rgba(rect, false)?;
     for _ in 0..40 {
         if escape_pressed() {
             return Some(before);
