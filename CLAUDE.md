@@ -6,10 +6,10 @@ Repository: `blink-screenshot/blink`. Website: `site/`, published to GitHub Page
 
 ## Commits and pull requests
 
-- No attribution in commits, pull requests or GitHub comments: no "Generated with Claude Code" line, no Co-Authored-By trailer and no link to the Claude session.
+- A `Co-Authored-By: Claude <noreply@anthropic.com>` trailer at the end of a commit message is fine. Do not add "Generated with Claude Code" lines or links to the Claude session to commits, pull requests or GitHub comments.
 - Commit as `Blink <blink-screenshot@users.noreply.github.com>`: pass `-c user.name="Blink" -c user.email="blink-screenshot@users.noreply.github.com"` to `git commit`. Never commit with a personal name or email address.
 - Never push to `main`. Work on a branch and open a pull request; the maintainer merges.
-- Commit messages and pull requests in English. Talk to the maintainer in Dutch.
+- Commit messages and pull requests in English.
 - The repository is public: never commit personal data, internal planning, pricing or strategy documents. Those belong outside the repository.
 
 ## Releasing
