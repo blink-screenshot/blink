@@ -1,6 +1,7 @@
 //! Windows implementation (raw Win32).
 
 mod capture;
+mod hdr;
 mod http;
 mod kbhook;
 mod ocr;

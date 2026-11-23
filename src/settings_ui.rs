@@ -607,6 +607,13 @@ impl SettingsApp {
             t("Include the mouse pointer"),
             Some(("pointer", t("Captures the mouse pointer where it is when you press the hotkey. In the editor it is a separate object: drag it elsewhere, or select it and press Delete. Copy and Save draw it into the screenshot. Not for captures started from the tray menu (the pointer would only show the menu) or scrolling captures."))),
         );
+        section(ui, t("HDR screens"));
+        check(
+            ui,
+            &mut c.hdr_screenshots,
+            t("Tone map HDR screens (experimental)"),
+            Some(("hdr", t("For screens with HDR turned on in Windows. Without this, bright parts of HDR games, videos and photos come out as flat white in a screenshot. With this, Blink checks per screen whether HDR is on and, only there, brings the bright parts back into the picture with their detail and colour. On screens without HDR nothing changes and it costs nothing. Ordinary apps look the same, except that white can come out a little less bright when there is HDR content on the same screen. Not for scrolling captures or recordings. Experimental: if a screenshot looks wrong, turn it off."))),
+        );
         section(ui, t("Scrolling capture"));
         egui::Grid::new("scroll").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
             ui.label(t("Wait per scroll step"));

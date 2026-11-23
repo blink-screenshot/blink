@@ -355,6 +355,9 @@ pub struct Config {
     pub history_max_age_hours: u32,
     /// Capture the mouse pointer too (a separate, movable object in the editor).
     pub capture_pointer: bool,
+    /// Experimental: tone map monitors that have HDR on instead of clipping their highlights
+    /// (`platform/win/hdr.rs`). Off by default.
+    pub hdr_screenshots: bool,
     /// Screen recording.
     pub recording: Recording,
 }
@@ -390,6 +393,7 @@ impl Default for Config {
             history_size: 10,
             history_max_age_hours: 24,
             capture_pointer: false,
+            hdr_screenshots: false,
             recording: Recording::default(),
         }
     }

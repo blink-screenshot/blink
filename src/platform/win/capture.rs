@@ -164,8 +164,10 @@ pub fn virtual_screen() -> IRect {
     }
 }
 
-/// Grabs a rectangle of the screen (virtual-screen coordinates).
-pub fn grab(r: IRect) -> Option<Shot> {
+/// Grabs a rectangle of the screen (virtual-screen coordinates). With `hdr` (the
+/// experimental setting), monitors that have HDR on are tone mapped instead of clipped; see
+/// `hdr.rs`.
+pub fn grab(r: IRect, hdr: bool) -> Option<Shot> {
     if r.is_empty() {
         return None;
     }
@@ -194,6 +196,10 @@ pub fn grab(r: IRect) -> Option<Shot> {
             // GDI may batch drawing: done before the pixels are read straight from memory.
             GdiFlush();
             SelectObject(mem, old);
+            if ok && hdr {
+                let len = r.w as usize * r.h as usize * 4;
+                super::hdr::tone_map_into(r, std::slice::from_raw_parts_mut(bits as *mut u8, len));
+            }
             if ok {
                 // The shot keeps the bitmap (and deletes it when dropped).
                 result = Some(Shot { rect: r, bmp, bits: bits as *const u8 });
@@ -209,8 +215,8 @@ pub fn grab(r: IRect) -> Option<Shot> {
     }
 }
 
-pub fn grab_rgba(r: IRect) -> Option<RgbaImage> {
-    grab(r).and_then(|s| s.crop_rgba(s.rect))
+pub fn grab_rgba(r: IRect, hdr: bool) -> Option<RgbaImage> {
+    grab(r, hdr).and_then(|s| s.crop_rgba(s.rect))
 }
 
 #[derive(Clone, Copy, Debug)]

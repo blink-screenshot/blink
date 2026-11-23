@@ -2,6 +2,12 @@
 
 All notable changes to Blink, per version. Every version is on [GitHub](https://github.com/blink-screenshot/blink/releases) with its installer; the release notes are taken from this file.
 
+## [1.4.0] - 2026-11-23
+
+### New features
+
+- **Screenshots of HDR screens (experimental).** With HDR on in Windows, bright parts of HDR games, videos and photos came out as flat white in a screenshot. Turn on *Tone map HDR screens* in Settings > Capture and Blink brings them back with their detail and colour. It only does something on screens that have HDR on; on other screens nothing changes. Ordinary apps look the same, though white can come out a little less bright when there is HDR content on the same screen. Not for scrolling captures or recordings. It is off by default: if a screenshot looks wrong with it, turn it off and let us know.
+
 ## [1.3.3] - 2026-11-21
 
 ### Improvements

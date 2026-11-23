@@ -1036,7 +1036,7 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
                 Action::Record => Mode::Record,
                 _ => Mode::Region,
             };
-            match grab(virtual_screen()) {
+            match grab(virtual_screen(), c.hdr_screenshots) {
                 Some(shot) => {
                     // Notifications stay above every normal window, the overlay included, and
                     // would take the clicks there. Ours is in the frozen screenshot already,
@@ -1079,11 +1079,11 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
         Action::Fullscreen => {
             let r = monitor_under_cursor();
             shown = Some(r);
-            grab_rgba(r)
+            grab_rgba(r, c.hdr_screenshots)
         }
         Action::AllScreens => {
             shown = Some(virtual_screen());
-            grab_rgba(virtual_screen())
+            grab_rgba(virtual_screen(), c.hdr_screenshots)
         }
         Action::ActiveWindow => {
             let target = target_app_window();
@@ -1101,7 +1101,7 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
             let r = target.and_then(window_bounds).map(|r| r.intersect(&virtual_screen())).filter(|r| !r.is_empty());
             let r = r.unwrap_or_else(monitor_under_cursor);
             shown = Some(r);
-            grab_rgba(r)
+            grab_rgba(r, c.hdr_screenshots)
         }
         _ => None,
     };

@@ -11,6 +11,7 @@ mod emoji;
 mod frame;
 #[cfg(test)]
 mod golden;
+mod hdr;
 mod history;
 mod i18n;
 mod i18n_de;
