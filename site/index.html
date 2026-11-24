@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Blink | Free screenshot tool for Windows</title>
-<meta name="description" content="Blink is a free, open-source screenshot tool for Windows. Capture a region, window or whole scrolling page, annotate, blur what must stay private, and put it on a background or device mockup. Also records the screen to MP4 or GIF.">
+<meta name="description" content="Blink is a free, open-source screenshot tool for Windows. Capture a region, window or whole scrolling page, annotate, blur what must stay private, and put it on a background or device mockup. Copies text and tables from the screen and records it to MP4 or GIF.">
 <meta name="theme-color" content="#101114">
 <meta property="og:title" content="Blink | Screenshots that look finished">
 <meta property="og:description" content="Free, open-source screenshot tool for Windows: capture, annotate, redact and present, and record the screen to MP4 or GIF.">
@@ -174,6 +174,7 @@
   .card h3 { margin-bottom: 8px; }
   .card p { color: var(--muted); font-size: .97rem; }
 
+  code { font-family: var(--mono); font-size: .86em; color: var(--accent-soft); }
   kbd {
     font-family: var(--mono); font-size: .82rem;
     background: var(--group); border: 1px solid var(--border); border-bottom-width: 2px;
@@ -217,6 +218,7 @@
 
   /* downloads */
   .dl { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  @media (min-width: 900px) { .dl { grid-template-columns: 1.6fr 1fr 1fr; } }
   .dl .card { display: flex; flex-direction: column; gap: 10px; }
   .dl .card.main { border-color: var(--accent-dim); box-shadow: 0 30px 90px -40px rgba(255, 46, 147, .35); }
   .dl .card .os { display: flex; align-items: center; gap: 10px; }
@@ -255,6 +257,62 @@
 
   /* support */
   .support { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 26px; }
+
+  /* hero download buttons: the label plus a small line with what you get */
+  .btn.tall { min-height: 58px; flex-direction: column; gap: 0; line-height: 1.2; padding: 8px 24px; }
+  .btn.tall small { font-size: .78rem; font-weight: 500; opacity: .75; }
+
+  /* overview: every main feature at a glance, each tile links to its section */
+  .overview { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .tile {
+    display: flex; flex-direction: column; gap: 8px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 20px; color: var(--text); text-decoration: none;
+    transition: border-color .15s ease, transform .15s ease;
+  }
+  .tile:hover { border-color: var(--accent-dim); color: var(--text); transform: translateY(-2px); }
+  .tile .ico { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; background: rgba(255, 46, 147, .12); color: var(--accent); }
+  .tile .ico svg { width: 22px; height: 22px; }
+  .tile h3 { font-size: 1.05rem; margin-top: 4px; }
+  .tile p { color: var(--muted); font-size: .93rem; line-height: 1.5; }
+  .tile { position: relative; }
+  .tile .new { position: absolute; top: 20px; right: 20px; font-family: var(--mono); font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink); background: var(--accent); border-radius: 999px; padding: 2px 8px; }
+  @media (prefers-reduced-motion: reduce) { .tile { transition: none; } .tile:hover { transform: none; } }
+
+  /* copy text and tables: a drawn example, from the screen to a spreadsheet */
+  .xfer { display: grid; gap: 14px; grid-template-columns: 1fr; align-items: center; }
+  @media (min-width: 640px) { .xfer { grid-template-columns: 1fr auto 1fr; } }
+  .xfer .arrow { justify-self: center; color: var(--accent); font-size: 1.6rem; line-height: 1; }
+  @media (max-width: 639px) { .xfer .arrow { transform: rotate(90deg); } }
+  .panel-mock { border-radius: 12px; border: 1px solid var(--border); overflow: hidden; background: #fff; color: #1f2328; font-size: .78rem; box-shadow: 0 24px 70px -20px rgba(0, 0, 0, .7); }
+  .panel-mock .bar { background: #eef0f4; color: #57606a; font-size: .74rem; padding: 7px 12px; border-bottom: 1px solid #d8dce3; display: flex; justify-content: space-between; gap: 8px; }
+  .panel-mock table { width: 100%; border-collapse: collapse; }
+  .panel-mock th, .panel-mock td { padding: 5px 8px; text-align: left; white-space: nowrap; }
+  .panel-mock th { font-weight: 600; color: #57606a; font-size: .74rem; }
+  .shot-table { position: relative; padding: 10px; }
+  .shot-table table { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; background: rgba(255, 46, 147, .07); }
+  .shot-table td + td, .shot-table th + th { text-align: right; }
+  .shot-table .label { position: absolute; right: 10px; bottom: -2px; transform: translateY(100%); background: var(--accent); color: var(--ink); font-weight: 650; font-size: .72rem; padding: 3px 8px; border-radius: 0 0 6px 6px; }
+  .sheet th, .sheet td { border: 1px solid #d8dce3; }
+  .sheet thead th { background: #eef0f4; text-align: center; font-weight: 500; }
+  .sheet tbody th { background: #eef0f4; width: 26px; text-align: center; font-weight: 500; color: #57606a; }
+  .sheet td.num { text-align: right; }
+  .sheet tr.sel td { background: #e8f3ec; }
+  .sheet .bar b { color: #1d6f42; }
+
+  /* file names: a pattern and the file it makes */
+  .pattern { font-family: var(--mono); font-size: .86rem; white-space: nowrap; background: var(--canvas); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: grid; gap: 6px; overflow-x: auto; }
+  .pattern .in { color: var(--accent-soft); }
+  .pattern .out { color: var(--muted); }
+  .pattern .out::before { content: "\2192  "; color: var(--accent); }
+
+  /* download: two ways to get the Windows version */
+  .dl-choice { display: grid; gap: 10px; }
+  .dl-choice .row2 { display: grid; gap: 10px; grid-template-columns: 1fr; }
+  @media (min-width: 420px) { .dl-choice .row2 { grid-template-columns: 1fr 1fr; } }
+  .dl-choice .btn { width: 100%; }
+  .dl .card ul.diff { list-style: none; padding: 0; margin: 4px 0 0; display: grid; gap: 6px; font-size: .9rem; color: var(--muted); }
+  .dl .card ul.diff b { color: var(--text); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -267,11 +325,11 @@
       Blink
     </a>
     <nav class="main" aria-label="Main">
-      <a href="#capture">Capture</a>
-      <a href="#record">Record</a>
-      <a href="#edit">Edit</a>
+      <a href="#features">Features</a>
       <a href="#private">Private info</a>
       <a href="#present">Present</a>
+      <a href="#text">Copy text</a>
+      <a href="#record">Record</a>
       <a href="#compare">Compare</a>
       <a href="#faq">FAQ</a>
       <a href="https://github.com/blink-screenshot/blink">GitHub</a>
@@ -287,12 +345,12 @@
       <div class="hero-copy">
         <p class="eyebrow">Free and open-source screenshot tool for Windows</p>
         <h1>Screenshots that look <span class="hl">finished</span> the moment you take them.</h1>
-        <p class="lead">Capture a region, a window or a whole scrolling page. Mark it up, black out what is private, and put it on a background or a device. Or record it as MP4 or GIF. One small, native app, written in Rust, that starts with Windows and stays out of your way.</p>
+        <p class="lead">Capture a region, a window or a whole scrolling page. Mark it up, let Blink find and hide what is private, and put it on a background or a device. Copy text and tables straight off the screen, or record it as MP4 or GIF. One small, native app that starts with Windows and stays out of your way.</p>
         <div class="cta-row">
-          <a class="btn primary" href="https://github.com/blink-screenshot/blink/releases/latest/download/Blink-Setup.exe">Download for Windows</a>
-          <a class="btn" href="https://github.com/blink-screenshot/blink">View the source on GitHub</a>
+          <a class="btn primary tall" href="https://github.com/blink-screenshot/blink/releases/latest/download/Blink-Setup.exe">Download for Windows<small>Installer, 3 MB, updates itself</small></a>
+          <a class="btn tall" href="https://github.com/blink-screenshot/blink/releases/latest/download/Blink-portable.exe">Portable version<small>One .exe, 9 MB, no install</small></a>
         </div>
-        <p class="fine">Free, open source (GPL-3.0). No account, no ads, no telemetry. Windows 10 and 11, 64-bit.</p>
+        <p class="fine">Free, open source (GPL-3.0), <a href="https://github.com/blink-screenshot/blink">source on GitHub</a>. No account, no ads, no telemetry. Windows 10 and 11, 64-bit. <a href="#download">Which one do I need?</a></p>
       </div>
       <figure class="hero-shot">
         <div class="window">
@@ -305,14 +363,69 @@
   <div class="strip">
     <div class="wrap">
       <ul>
-        <li><span><b>7 capture modes</b> including scrolling pages, plus <b>copy text</b></span></li>
-        <li><span><b>Screen recording</b> to MP4 or GIF</span></li>
-        <li><span><b>Real redaction</b>, not a cosmetic blur</span></li>
+        <li><span><b>7 capture modes</b> including scrolling pages</span></li>
+        <li><span><b>Finds private info</b> and hides it for real</span></li>
         <li><span><b>17 backgrounds</b> and <b>18 device frames</b></span></li>
-        <li><span><b>Free and open source.</b> No account.</span></li>
+        <li><span><b>Copy text and tables</b> from the screen, offline</span></li>
+        <li><span><b>Screen recording</b> to MP4 or GIF</span></li>
       </ul>
     </div>
   </div>
+
+  <!-- OVERVIEW -->
+  <section class="block" id="features" style="padding-bottom:0">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">What Blink does</p>
+        <h2>Everything between pressing Print Screen and pressing paste.</h2>
+        <p class="lead">Each part is explained below, with screenshots. Pick what you need.</p>
+      </div>
+      <div class="overview">
+        <a class="tile" href="#capture">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/></svg></span>
+          <h3>Capture anything</h3>
+          <p>Region, window, inner pane, screen, all screens, or a whole scrolling page. Windows snap to their real edge.</p>
+        </a>
+        <a class="tile" href="#edit">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19 19 5M19 5h-6M19 5v6"/></svg></span>
+          <h3>Annotate in seconds</h3>
+          <p>Arrows, boxes, text, numbered steps, callouts and emoji. One key per tool.</p>
+        </a>
+        <a class="tile" href="#private">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/></svg></span>
+          <h3>Find private info</h3>
+          <p>Blink spots e-mail addresses, phone numbers, IBANs, keys and passwords. You hide them all in one click, with a blur that holds.</p>
+        </a>
+        <a class="tile" href="#present">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>
+          <h3>Present it</h3>
+          <p>Put the screenshot on one of 17 backgrounds or in one of 18 device frames. Ready for a slide or a post.</p>
+        </a>
+        <a class="tile" href="#text">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M10 4v16"/></svg></span>
+          <h3>Copy text and tables</h3>
+          <p>Point at text on the screen and it is on your clipboard. Tables paste into Excel with every value in its own cell.</p>
+        </a>
+        <a class="tile" href="#record">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg></span>
+          <h3>Record the screen</h3>
+          <p>MP4 or GIF, with click rings and the shortcuts you press. Trim it before you share.</p>
+        </a>
+        <a class="tile" href="#workflow">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l-1 5 3 3H7l3-3zM12 12v8"/></svg></span>
+          <span class="new">New</span>
+          <h3>Pin it to the screen</h3>
+          <p>Keep a screenshot above your other windows while you work: a value, a design, a set of instructions.</p>
+        </a>
+        <a class="tile" href="#workflow">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+          <span class="new">New</span>
+          <h3>Files where you want them</h3>
+          <p>Name screenshots with the date, the app or a counter, and sort them into folders per month or per app.</p>
+        </a>
+      </div>
+    </div>
+  </section>
 
   <!-- CAPTURE -->
   <section class="block" id="capture">
@@ -340,11 +453,10 @@
             <li>Window edges without the invisible resize border or shadow that Windows adds.</li>
             <li>Works on GPU-rendered apps such as Chrome, Edge and Electron, where copying a window directly often returns black. Blink cuts the window out of a frozen copy of the screen instead.</li>
             <li>Scrolling capture stitches the page together and recognises fixed headers and footers.</li>
-            <li><b>Copy text</b> instead of an image: in the Text mode (<kbd>T</kbd>), click a line, <kbd>Ctrl</kbd> + click a paragraph or drag over a region, and the text is on your clipboard. A table stays a table when you paste it into Excel, Word or Teams. It is read by the OCR engine built into Windows, offline.</li>
-            <li><b>Pin a screenshot</b> to the screen: it stays above your other windows, with Copy, Save as, Edit, opacity and zoom in its bar. Handy to keep a value, a design or instructions in view while you work.</li>
             <li><b>Read QR codes</b>: point at one in the overlay and the label shows what it says. Click to copy it, <kbd>Ctrl</kbd> + click to open a web link.</li>
             <li><b>Include the mouse pointer</b> if you want it (Settings &gt; Capture). In the editor it is a separate object you can move, resize or delete.</li>
-            <li><b>Record</b> instead of capture: press <kbd>R</kbd> in the overlay. <a href="#record">More about recording</a>.</li>
+            <li><b>HDR screens</b> (experimental): turn on <i>Tone map HDR screens</i> and bright HDR games, videos and photos keep their detail instead of turning flat white.</li>
+            <li>The same overlay also <a href="#text">copies text</a> (<kbd>T</kbd>) and <a href="#record">records</a> (<kbd>R</kbd>).</li>
           </ul>
         </div>
         <div>
@@ -374,51 +486,8 @@
     </div>
   </section>
 
-  <!-- RECORD -->
-  <section class="block alt" id="record">
-    <div class="wrap">
-      <div class="head">
-        <p class="eyebrow">Record</p>
-        <h2>When a screenshot is not enough, record it.</h2>
-        <p class="lead">Press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>Print Screen</kbd>, or <kbd>R</kbd> in the capture overlay, and pick a region, a window or a screen. After a 3-2-1 countdown a small bar next to the area shows the time, with pause, stop and discard. Stop with the same hotkey and you have an MP4 or a GIF.</p>
-      </div>
-
-      <div class="row">
-        <figure>
-          <img src="img/record.png" width="868" height="620" loading="lazy" style="border-radius:var(--radius)" alt="A recording in progress: a team page inside a thin red frame, an orange ring where the mouse clicks the Invite member button, a Ctrl + C label at the bottom, and below the frame the recording bar with a red dot, 0:12, pause, stop and discard. Labels MP4 and GIF next to it.">
-          <figcaption>The click ring, the pointer and the <i>Ctrl + C</i> label are drawn by Blink when it saves the video.</figcaption>
-        </figure>
-        <div class="copy">
-          <h3>Clicks and shortcuts, so people can follow along</h3>
-          <ul class="ticks">
-            <li><b>MP4 or GIF</b>, at 15 or 30 frames per second</li>
-            <li>A <b>ring where you click</b> (orange for the left button, blue for the right), and if you want a soft circle that follows the pointer</li>
-            <li><b>Keys you press</b>, if you switch it on: shortcuts like <kbd>Ctrl</kbd> + <kbd>C</kbd>, <kbd>F5</kbd> or <kbd>Enter</kbd>, but not what you type, so passwords stay out of the video</li>
-            <li>The pointer, clicks and keys are added when you save, so you can still switch each of them off</li>
-            <li><b>Smooth on 4K.</b> On a screen at 200% scaling or more, Blink records at half size, which looks like the same screen at 100%: files four times smaller. Choose <i>Full resolution</i> to keep every pixel.</li>
-          </ul>
-        </div>
-      </div>
-
-      <div class="grid" style="margin-top:clamp(40px, 6vw, 72px)">
-        <div class="card">
-          <h3>Share it straight away</h3>
-          <p>A notification after each recording says how long and how large it is, with <i>Edit</i>, <i>As GIF</i> and <i>Copy</i>. Copy puts the file itself on the clipboard: paste it into Teams, Slack, an e-mail or a folder. Recordings go to Videos\Blink.</p>
-        </div>
-        <div class="card">
-          <h3>Trim before you send</h3>
-          <p><i>Edit</i> opens the clip window. Play it, drag the handles to cut off the start and the end, switch the pointer, clicks and keys on or off, and save as MP4 or GIF. It shows roughly how large the file will be before you save.</p>
-        </div>
-        <div class="card">
-          <h3>What it does not do (yet)</h3>
-          <p>No sound, one monitor at a time, and a window is recorded as the area it had when you started. Blink uses the video encoder that is part of Windows, so the download hardly grew; Windows N editions need the Media Feature Pack.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
   <!-- EDIT -->
-  <section class="block" id="edit">
+  <section class="block alt" id="edit">
     <div class="wrap">
       <div class="head">
         <p class="eyebrow">Edit</p>
@@ -471,7 +540,7 @@
   </section>
 
   <!-- PRIVATE INFO -->
-  <section class="block alt" id="private">
+  <section class="block" id="private">
     <div class="wrap">
       <div class="head">
         <p class="eyebrow">Find private info</p>
@@ -522,7 +591,7 @@
   </section>
 
   <!-- PRESENT -->
-  <section class="block" id="present">
+  <section class="block alt" id="present">
     <div class="wrap">
       <div class="head">
         <p class="eyebrow">Present</p>
@@ -532,18 +601,170 @@
       <div class="row">
         <figure>
           <div class="window">
-            <img src="img/editor-mockup.png" width="1132" height="750" loading="lazy" alt="The Blink editor showing the annotated screenshot inside a monitor mockup on a blue gradient, with the Background and Device mockup panels open.">
+            <img src="img/editor-frame.png" width="1132" height="750" loading="lazy" alt="The Blink editor with the annotated dashboard on a dark pink gradient. The Background panel on the right shows a grid of background swatches and sliders for padding, corner radius and shadow, a Film grain switch, and canvas shapes Auto, 1:1, 4:3, 3:2, 16:9, 9:16 and 4:5.">
           </div>
         </figure>
         <div class="copy">
-          <h3>Backgrounds and devices in two clicks</h3>
+          <h3>A background in one click</h3>
           <ul class="ticks">
             <li><b>17 backgrounds</b>: gradients, mesh, waves, solid and transparent, plus your own two-colour gradient</li>
-            <li>Padding, corner radius, shadow, film grain and canvas ratios (1:1, 4:3, 3:2, 16:9, 9:16, 4:5), or an exact size for social media and slides</li>
+            <li>Padding, corner radius, shadow and film grain, each with one slider</li>
+            <li>Canvas shapes (1:1, 4:3, 3:2, 16:9, 9:16, 4:5), or an exact size for social media and slides</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="row flip">
+        <div class="copy">
+          <h3>Or show it on a device</h3>
+          <ul class="ticks">
             <li><b>16 devices</b> (iPhone, Pixel, Galaxy, iPad, Surface, MacBook, Windows laptops, iMac and monitors), plus a browser window and an app window</li>
             <li>Blink picks the device that fits your screenshot. <i>Fill</i> crops a little to fill the screen, <i>Fit</i> shows everything.</li>
             <li>Devices are drawn as vectors, so they stay sharp at any resolution</li>
+            <li>Combine a device with any background</li>
           </ul>
+        </div>
+        <figure>
+          <div class="window">
+            <img src="img/editor-mockup.png" width="1132" height="750" loading="lazy" alt="The Blink editor showing the annotated screenshot inside a monitor mockup on a blue gradient, with the Background and Device mockup panels open.">
+          </div>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- TEXT -->
+  <section class="block" id="text">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">Copy text</p>
+        <h2>Text on the screen is text on your clipboard.</h2>
+        <p class="lead">An error message in a dialog, a value in a dashboard, a table in a PDF someone screen-shared: point at it and copy it, instead of typing it over.</p>
+      </div>
+
+      <div class="row">
+        <div class="copy">
+          <h3>Point, click, paste</h3>
+          <p>Press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Print Screen</kbd>, or <kbd>T</kbd> in the capture overlay. Blink reads the screen while you aim and lights up the text it found.</p>
+          <ul class="ticks">
+            <li><b>Click a line</b> to copy it, <kbd>Ctrl</kbd> + click for its whole paragraph, or <b>drag</b> over a region</li>
+            <li><b>Tables stay tables.</b> Paste into Excel and every value lands in its own cell; Word, Outlook and Teams make a real table of it. The label says when Blink found one.</li>
+            <li>In the editor, select text in a screenshot like in a document (<kbd>X</kbd>), and copy or hide it</li>
+            <li>Read on your PC by the OCR engine built into Windows: offline, nothing to download, nothing sent anywhere</li>
+          </ul>
+        </div>
+        <figure>
+          <div class="xfer" role="img" aria-label="Example: a table of four customers with their plan and monthly amount is selected on the screen, with the label Table, 3 columns by 5 rows. Pasted into a spreadsheet, every name, plan and amount is in its own cell.">
+            <div class="panel-mock" aria-hidden="true">
+              <div class="bar"><span>On the screen</span><span>Recent customers</span></div>
+              <div class="shot-table">
+                <table>
+                  <tr><th>Name</th><th>Plan</th><th>MRR</th></tr>
+                  <tr><td>Sanne de Vries</td><td>Pro</td><td>&euro; 49</td></tr>
+                  <tr><td>Jeroen Bakker</td><td>Team</td><td>&euro; 199</td></tr>
+                  <tr><td>Fatima El Idrissi</td><td>Pro</td><td>&euro; 49</td></tr>
+                  <tr><td>Lucas Meyer</td><td>Starter</td><td>&euro; 19</td></tr>
+                </table>
+                <span class="label">Table, 3 columns &times; 5 rows</span>
+              </div>
+              <div style="height:22px"></div>
+            </div>
+            <span class="arrow" aria-hidden="true">&rarr;</span>
+            <div class="panel-mock sheet" aria-hidden="true">
+              <div class="bar"><span><b>Excel</b></span><span>Ctrl + V</span></div>
+              <table>
+                <thead><tr><th></th><th>A</th><th>B</th><th>C</th></tr></thead>
+                <tbody>
+                  <tr><th>1</th><td>Name</td><td>Plan</td><td>MRR</td></tr>
+                  <tr class="sel"><th>2</th><td>Sanne de Vries</td><td>Pro</td><td class="num">&euro; 49</td></tr>
+                  <tr class="sel"><th>3</th><td>Jeroen Bakker</td><td>Team</td><td class="num">&euro; 199</td></tr>
+                  <tr class="sel"><th>4</th><td>Fatima El Idrissi</td><td>Pro</td><td class="num">&euro; 49</td></tr>
+                  <tr class="sel"><th>5</th><td>Lucas Meyer</td><td>Starter</td><td class="num">&euro; 19</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <figcaption>A table copied off the screen, pasted into Excel: rows and columns intact.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- RECORD -->
+  <section class="block alt" id="record">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">Record</p>
+        <h2>When a screenshot is not enough, record it.</h2>
+        <p class="lead">Press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>Print Screen</kbd>, or <kbd>R</kbd> in the capture overlay, and pick a region, a window or a screen. After a 3-2-1 countdown a small bar next to the area shows the time, with pause, stop and discard. Stop with the same hotkey and you have an MP4 or a GIF.</p>
+      </div>
+
+      <div class="row">
+        <figure>
+          <img src="img/record.png" width="868" height="620" loading="lazy" style="border-radius:var(--radius)" alt="A recording in progress: a team page inside a thin red frame, an orange ring where the mouse clicks the Invite member button, a Ctrl + C label at the bottom, and below the frame the recording bar with a red dot, 0:12, pause, stop and discard. Labels MP4 and GIF next to it.">
+          <figcaption>The click ring, the pointer and the <i>Ctrl + C</i> label are drawn by Blink when it saves the video.</figcaption>
+        </figure>
+        <div class="copy">
+          <h3>Clicks and shortcuts, so people can follow along</h3>
+          <ul class="ticks">
+            <li><b>MP4 or GIF</b>, at 15 or 30 frames per second</li>
+            <li>A <b>ring where you click</b> (orange for the left button, blue for the right), and if you want a soft circle that follows the pointer</li>
+            <li><b>Keys you press</b>, if you switch it on: shortcuts like <kbd>Ctrl</kbd> + <kbd>C</kbd>, <kbd>F5</kbd> or <kbd>Enter</kbd>, but not what you type, so passwords stay out of the video</li>
+            <li>The pointer, clicks and keys are added when you save, so you can still switch each of them off</li>
+            <li><b>Smooth on 4K.</b> On a screen at 200% scaling or more, Blink records at half size, which looks like the same screen at 100%: files four times smaller. Choose <i>Full resolution</i> to keep every pixel.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="grid" style="margin-top:clamp(40px, 6vw, 72px)">
+        <div class="card">
+          <h3>Share it straight away</h3>
+          <p>A notification after each recording says how long and how large it is, with <i>Edit</i>, <i>As GIF</i> and <i>Copy</i>. Copy puts the file itself on the clipboard: paste it into Teams, Slack, an e-mail or a folder. Recordings go to Videos\Blink.</p>
+        </div>
+        <div class="card">
+          <h3>Trim before you send</h3>
+          <p><i>Edit</i> opens the clip window. Play it, drag the handles to cut off the start and the end, switch the pointer, clicks and keys on or off, and save as MP4 or GIF. It shows roughly how large the file will be before you save.</p>
+        </div>
+        <div class="card">
+          <h3>What it does not do (yet)</h3>
+          <p>No sound, one monitor at a time, and a window is recorded as the area it had when you started. Blink uses the video encoder that is part of Windows, so the download hardly grew; Windows N editions need the Media Feature Pack.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WORKFLOW -->
+  <section class="block" id="workflow">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">After the capture</p>
+        <h2>Keep it in view. Find it again later.</h2>
+        <p class="lead">Blink does what you want after each screenshot: open the editor, copy, save, pin it, or ask you with a small menu at the mouse. The notification has <i>Edit</i>, <i>Save</i>, <i>Save as</i> and <i>Pin</i>.</p>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3>Pin a screenshot to the screen</h3>
+          <p>Choose <i>Pin</i> on the notification or press <kbd>Ctrl</kbd> + <kbd>P</kbd> in the editor. The screenshot appears at once in a small window without a frame that stays above your other windows, right where you took it. Keep a value, a design or instructions in view while you work.</p>
+          <ul class="ticks">
+            <li>Drag to move, drag an edge or <kbd>Ctrl</kbd> + scroll to resize</li>
+            <li>Make it see-through to work on what is below</li>
+            <li>Copy, Save as or Edit from its bar, <kbd>Esc</kbd> closes it</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>File names and folders your way</h3>
+          <p>Build the name from variables such as <code>{date}</code>, <code>{time}</code>, <code>{app}</code> (the program you captured) and <code>{n}</code> (a counter). A <code>\</code> makes a folder. Or pick a ready-made pattern.</p>
+          <div class="pattern" style="margin-top:14px">
+            <span class="in">{year}-{month}\{app}_{time}</span>
+            <span class="out">2026-11\chrome_14-32-05.png</span>
+            <span class="in" style="margin-top:6px">Blink_{n:4}</span>
+            <span class="out">Blink_0001.png</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>History in the tray</h3>
+          <p>Your latest screenshots are under <i>History</i> in the tray menu, each with a small preview: click one to copy or edit it again. By default Blink keeps the last 10 for 24 hours, only on your PC. You choose how many and how long, or turn it off.</p>
+          <p style="margin-top:12px">Save as PNG, JPEG or WebP. <i>Open screenshots folder</i> selects the newest one for you.</p>
         </div>
       </div>
     </div>
@@ -555,7 +776,7 @@
       <div class="head">
         <p class="eyebrow">Built in Rust</p>
         <h2>Light when idle. Quick when you need it.</h2>
-        <p class="lead">Blink is written in Rust and compiles to native Windows code: no Electron, no browser engine, no runtime to install. The whole app is one exe of about 7 MB.</p>
+        <p class="lead">Blink is written in Rust and compiles to native Windows code: no Electron, no browser engine, no runtime to install. The installer is about 3 MB; the whole app is one exe of about 9 MB.</p>
       </div>
       <div class="grid">
         <div class="card">
@@ -563,12 +784,8 @@
           <p>The tray app, hotkeys, capture and overlay are plain Win32 with no UI framework. The editor starts as its own process only when you need it, so an editor crash never takes the tray with it.</p>
         </div>
         <div class="card">
-          <h3>You decide what happens next</h3>
-          <p>After each capture: open the editor, copy, save, or have Blink ask you with a small menu at the mouse. The notification has <i>Edit</i>, <i>Save</i> and <i>Save as</i> buttons. PNG, JPEG, WebP and BMP. <b>History</b> in the tray menu keeps your latest screenshots, to copy or edit again.</p>
-        </div>
-        <div class="card">
           <h3>Installs without admin rights</h3>
-          <p>Per-user install, nothing machine-wide. There is also a portable exe that runs without installing. Start with Windows is optional.</p>
+          <p>Per-user install, nothing machine-wide. There is also a <a href="#download">portable exe</a> that runs without installing. Start with Windows is optional.</p>
         </div>
         <div class="card">
           <h3>Your language, your theme</h3>
@@ -661,11 +878,20 @@
             <h3>Windows</h3>
             <span class="badge ok">Available</span>
           </div>
-          <p>Windows 10 and 11, 64-bit. Installs per user, no admin rights needed.</p>
+          <p>Windows 10 and 11, 64-bit. No admin rights needed.</p>
           <span class="spacer"></span>
-          <a class="btn primary" href="https://github.com/blink-screenshot/blink/releases/latest/download/Blink-Setup.exe">Download installer</a>
+          <div class="dl-choice">
+            <div class="row2">
+              <a class="btn primary tall" href="https://github.com/blink-screenshot/blink/releases/latest/download/Blink-Setup.exe">Installer<small>3 MB, recommended</small></a>
+              <a class="btn tall" href="https://github.com/blink-screenshot/blink/releases/latest/download/Blink-portable.exe">Portable .exe<small>9 MB, no install</small></a>
+            </div>
+            <ul class="diff">
+              <li><b>Installer</b>, for most people: installs for your user only, starts with Windows (you can switch that off), updates itself with one click.</li>
+              <li><b>Portable</b>: one .exe you run from any folder, nothing to install. It does not start with Windows unless you turn that on, and an update installs the regular version. Settings are still kept in <code>%APPDATA%\Blink</code>.</li>
+            </ul>
+          </div>
           <div class="links">
-            <a href="https://github.com/blink-screenshot/blink/releases/latest/download/Blink-portable.exe">Portable .exe</a>
+            <a href="https://github.com/blink-screenshot/blink/releases/latest">Release notes and checksums</a>
             <a href="https://github.com/blink-screenshot/blink/releases">All versions</a>
             <a href="code-signing.html">Code signing policy</a>
           </div>
@@ -711,6 +937,10 @@
       <details>
         <summary>Windows says the publisher is unknown. Is that safe?</summary>
         <p>The installer is not code-signed yet, so Windows SmartScreen warns about it the first time. Choose <i>More info</i>, then <i>Run anyway</i>. Every release is built in public by GitHub Actions from the source code in the repository, and GitHub lists the SHA-256 checksum of each file, so you can check exactly what you downloaded. Signing is on its way, see the <a href="code-signing.html">code signing policy</a>.</p>
+      </details>
+      <details>
+        <summary>Installer or portable: which one should I take?</summary>
+        <p>The installer, unless you cannot or do not want to install software. It installs for your user only (no admin rights), starts Blink with Windows and installs updates with one click. The portable .exe runs from any folder without installing; it can start with Windows too if you turn that on in Settings. It checks for updates as well, but installing one puts the regular version on your PC. Both keep their settings in <code>%APPDATA%\Blink</code>, so the portable version is not made to run from a USB stick on other PCs.</p>
       </details>
       <details>
         <summary>Does Blink upload my screenshots anywhere?</summary>
