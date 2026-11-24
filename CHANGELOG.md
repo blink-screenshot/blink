@@ -2,18 +2,29 @@
 
 All notable changes to Blink, per version. Every version is on [GitHub](https://github.com/blink-screenshot/blink/releases) with its installer; the release notes are taken from this file.
 
-## [1.5.0] - 2026-11-24
+## [1.6.0] - 2026-11-24
 
 ### New features
 
-- **Pin a screenshot to the screen.** Press the pin on the notification after a capture, choose *Pin* in the *Ask me what to do* menu, press the pin in the editor (`Ctrl` + `P`), or turn on *Pin to the screen* in Settings > General > After capture. The screenshot appears at once in a small window without a frame that stays above your other windows, right where you took it, so you can keep a value, a design or instructions in view while you work. Its bar has *On top* (Blink remembers your choice for the next pin), *Copy*, *Save as*, *Edit* and the opacity, to see through it to what is below. Drag it anywhere to move it, drag an edge to resize it, `Ctrl` + scroll to zoom, double-click for 100%, `Esc` closes it. Right-click it for the same options.
 - **Name your screenshots, and sort them into folders.** In Settings > Output, *File name and folders* now takes variables such as `{date}`, `{time}`, `{app}` (the program you captured, like `chrome`), `{mode}`, `{width}`, `{user}` and `{n}` (a number that counts up). Type `\` to make a folder: `{year}-{month}\{app}_{time}` puts every month in a folder of its own. Pick a ready-made pattern (one folder, a folder per month, per app, or both, or numbered), or click a variable to insert it; the example below shows what your next file will be called. Recordings follow the same pattern. Your current names stay exactly as they were. Suggested by @bqoun in #17.
 - **Opening your screenshots folder shows the newest one.** *Open screenshots folder* in the tray menu and *Open* in Settings select your newest screenshot in Explorer, also when it is in one of the new folders, so you do not have to scroll down to find it.
-- **Copy tables as tables.** When the text you copy from the screen or select in the editor is a table, Blink keeps its rows and columns: paste it into Excel and every value lands in its own cell; Word, Outlook and Teams make a real table of it. The label in the capture overlay and the notification say when a table was found. In the editor, *As text* next to *Copy table* copies it as plain text instead.
+
+### Improvements
+
+- **Pins appear at once.** Pinning a screenshot no longer takes a moment: the pin opens the instant you press it. Drag an edge to resize it (it keeps its shape), and right-click it for every option.
+- **A push pin instead of the word.** The notification after a capture and the editor's toolbar show a pin icon for pinning; the *Ask me what to do* menu says *Pin*.
+- **More room in the pin's bar**, so its buttons no longer sit cramped together.
 
 ### Bug fixes
 
 - **The editor's toolbar in a small window.** The tools now move to a second row instead of running under Copy, Save and the other buttons on the right, and every group of buttons lines up and sits in the middle of the bar.
+
+## [1.5.0] - 2026-11-24
+
+### New features
+
+- **Pin a screenshot to the screen.** Choose *Pin* on the notification after a capture, in the *Ask me what to do* menu, with the Pin button in the editor (`Ctrl` + `P`), or turn on *Pin to the screen* in Settings > General > After capture. The screenshot opens in a small window without a frame that stays above your other windows, right where you took it, so you can keep a value, a design or instructions in view while you work. Its bar has *On top* (Blink remembers your choice for the next pin), *Copy*, *Save as*, *Edit* and the opacity, to see through it to what is below. Drag it anywhere to move it, resize it with `Ctrl` + scroll or the corner, double-click for 100%, `Esc` closes it.
+- **Copy tables as tables.** When the text you copy from the screen or select in the editor is a table, Blink keeps its rows and columns: paste it into Excel and every value lands in its own cell; Word, Outlook and Teams make a real table of it. The label in the capture overlay and the notification say when a table was found. In the editor, *As text* next to *Copy table* copies it as plain text instead.
 
 ## [1.4.0] - 2026-11-23
 
