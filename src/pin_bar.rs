@@ -151,6 +151,41 @@ pub fn fit(aw: i32, ah: i32, w: u32, h: u32) -> (i32, i32, i32, i32) {
     ((aw - iw) / 2, (ah - ih) / 2, iw, ih)
 }
 
+/// Half the size of a BGRA picture (`w` x `h`, rows top down), each pixel the average of the
+/// 2 x 2 it covers (an odd last row or column is averaged with itself). For resizing a pin
+/// smoothly: stretching from a picture at most twice the size on screen is fast and still
+/// looks right, where shrinking a large screenshot in one go is slow or grainy.
+pub fn half_bgra(src: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
+    let (w, h) = (w.max(1) as usize, h.max(1) as usize);
+    let (hw, hh) = (w.div_ceil(2), h.div_ceil(2));
+    let mut out = vec![0u8; hw * hh * 4];
+    for y in 0..hh {
+        let (r0, r1) = (2 * y, (2 * y + 1).min(h - 1));
+        for x in 0..hw {
+            let (c0, c1) = (2 * x, (2 * x + 1).min(w - 1));
+            for c in 0..4 {
+                let px = |r: usize, col: usize| src[(r * w + col) * 4 + c] as u32;
+                let sum = px(r0, c0) + px(r0, c1) + px(r1, c0) + px(r1, c1);
+                out[(y * hw + x) * 4 + c] = ((sum + 2) / 4) as u8;
+            }
+        }
+    }
+    (out, hw as u32, hh as u32)
+}
+
+/// Which picture of a pyramid (0 = the screenshot, each next one half the size) to stretch
+/// to `tw` x `th` on screen: the smallest that is still at least that large, so it is never
+/// enlarged unless the screenshot itself is.
+pub fn pyramid_level(w: u32, h: u32, tw: i32, th: i32, levels: usize) -> usize {
+    let (mut lw, mut lh, mut level) = (w.max(1), h.max(1), 0);
+    while level + 1 < levels && lw.div_ceil(2) as i32 >= tw && lh.div_ceil(2) as i32 >= th {
+        lw = lw.div_ceil(2);
+        lh = lh.div_ceil(2);
+        level += 1;
+    }
+    level
+}
+
 /// Draws the bar, `width` pixels wide.
 pub fn render(l: &Layout, width: u32, scale: f32, st: &State, fonts: &Fonts) -> Option<Pixmap> {
     let h = height(scale) as u32;
@@ -255,6 +290,35 @@ mod tests {
 
     fn st() -> State {
         State { on_top: true, opacity: Some(100), zoom: 100, hover: None, pressed: None, copied: false }
+    }
+
+    #[test]
+    fn half_size_averages() {
+        // 3 x 2: two columns of 2 x 2, the last one of 1 x 2 averaged with itself.
+        #[rustfmt::skip]
+        let src: Vec<u8> = [
+            [0u8, 0, 0, 255], [100, 100, 100, 255], [10, 20, 30, 255],
+            [100, 100, 100, 255], [0, 0, 0, 255], [30, 40, 50, 255],
+        ].concat();
+        let (out, w, h) = half_bgra(&src, 3, 2);
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(out, [50, 50, 50, 255, 20, 30, 40, 255]);
+        let (out, w, h) = half_bgra(&[9, 8, 7, 6], 1, 1);
+        assert_eq!((w, h, out), (1, 1, vec![9, 8, 7, 6]));
+    }
+
+    #[test]
+    fn pyramid_never_enlarges_a_smaller_level() {
+        // 4000 x 2000, levels 2000 x 1000, 1000 x 500, 500 x 250.
+        assert_eq!(pyramid_level(4000, 2000, 4000, 2000, 4), 0);
+        assert_eq!(pyramid_level(4000, 2000, 2001, 1000, 4), 0);
+        assert_eq!(pyramid_level(4000, 2000, 2000, 1000, 4), 1);
+        assert_eq!(pyramid_level(4000, 2000, 1200, 600, 4), 1);
+        assert_eq!(pyramid_level(4000, 2000, 700, 350, 4), 2);
+        assert_eq!(pyramid_level(4000, 2000, 100, 50, 4), 3);
+        assert_eq!(pyramid_level(4000, 2000, 100, 50, 2), 1);
+        // Zoomed in past 100%: the screenshot itself.
+        assert_eq!(pyramid_level(400, 200, 800, 400, 3), 0);
     }
 
     fn fonts() -> &'static Fonts {

@@ -146,6 +146,41 @@ pub fn map_row(row: &[u8], white: f32, curve: &Curve, srgb: &Srgb, out: &mut [u8
     }
 }
 
+/// Every how many pixels (and rows) `mean_mapped` and `mean_bgra` look at one.
+pub const SAMPLE: usize = 4;
+
+/// The sum and count of the sRGB values (0..=255, R, G and B) that `map_row` would write for
+/// every `SAMPLE`th pixel of a row of RGBA half floats.
+pub fn mean_mapped(row: &[u8], white: f32, curve: &Curve, srgb: &Srgb) -> (u64, u64) {
+    let mut out = [0u8; 4];
+    let (mut sum, mut n) = (0u64, 0u64);
+    for p in row.chunks_exact(8).step_by(SAMPLE) {
+        map_row(p, white, curve, srgb, &mut out);
+        sum += out[..3].iter().map(|&v| v as u64).sum::<u64>();
+        n += 3;
+    }
+    (sum, n)
+}
+
+/// The sum and count of B, G and R of every `SAMPLE`th pixel of a row of BGRA.
+pub fn mean_bgra(row: &[u8]) -> (u64, u64) {
+    let (mut sum, mut n) = (0u64, 0u64);
+    for p in row.chunks_exact(4).step_by(SAMPLE) {
+        sum += p[..3].iter().map(|&v| v as u64).sum::<u64>();
+        n += 3;
+    }
+    (sum, n)
+}
+
+/// Whether a picture read through Desktop Duplication (average sRGB value `hdr`, 0..=255) is
+/// not a picture of the screen that BitBlt saw (average `sdr`): some drivers hand over an
+/// empty, black frame. Tone mapping darkens only highlights, and only a little, so a frame
+/// far darker than BitBlt's is wrong. When BitBlt's picture is (nearly) black itself, there
+/// is nothing to compare with and the frame counts as good.
+pub fn looks_blank(hdr: f32, sdr: f32) -> bool {
+    sdr > 8.0 && hdr < sdr * 0.25
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +283,29 @@ mod tests {
         assert!(g > 150 && g < 200, "g {g}");
         // Negative light is clipped to 0.
         assert_eq!(out[14], 0);
+    }
+
+    #[test]
+    fn empty_frames_are_caught() {
+        let srgb = Srgb::default();
+        let white = 2.5;
+        // A black frame next to BitBlt's picture of a light window: wrong.
+        let black = rgba_half(&[[0.0; 3]; 8]);
+        let curve = Curve::new(row_peak(&black, white));
+        let (s, n) = mean_mapped(&black, white, &curve, &srgb);
+        assert_eq!((s, n), (0, 6));
+        let light: Vec<u8> = [[200u8, 210, 220, 0]; 8].concat();
+        let (ls, ln) = mean_bgra(&light);
+        assert_eq!((ls, ln), (1260, 6));
+        assert!(looks_blank(s as f32 / n as f32, ls as f32 / ln as f32));
+        // The same picture in scRGB: right, also with highlights compressed.
+        let same = rgba_half(&[[1.5, 1.5, 1.5], [0.5, 0.5, 0.5], [10.0, 10.0, 10.0], [2.5, 2.5, 2.5]]);
+        let curve = Curve::new(row_peak(&same, white));
+        let (s, n) = mean_mapped(&same, white, &curve, &srgb);
+        assert!(!looks_blank(s as f32 / n as f32, 210.0));
+        // A dark screen cannot be judged: never blank.
+        assert!(!looks_blank(0.0, 5.0));
+        assert!(!looks_blank(60.0, 100.0));
     }
 
     #[test]

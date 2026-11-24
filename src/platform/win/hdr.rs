@@ -4,8 +4,9 @@
 //! each monitor that has HDR on and lies in the screenshot is then read again as Windows
 //! composes it, in scRGB (16-bit floats, via DXGI Desktop Duplication), tone mapped with
 //! `crate::hdr` and written over that monitor's part of the screenshot. Monitors without HDR
-//! keep the BitBlt picture; when anything fails, the BitBlt picture stays and the reason goes
-//! to `%LOCALAPPDATA%\Blink\hdr.log`.
+//! keep the BitBlt picture; when anything fails, or the frame read is far darker than the
+//! BitBlt picture (some drivers hand over an empty, black frame), the BitBlt picture stays and
+//! the reason goes to `%LOCALAPPDATA%\Blink\hdr.log`.
 //!
 //! Cost: the check whether a monitor has HDR on is a call into user32 (already loaded), with
 //! no allocations worth mentioning. Only when a monitor has HDR on does Blink load the
@@ -13,7 +14,7 @@
 //! costs nothing on PCs without an HDR screen.
 
 use super::capture::IRect;
-use crate::hdr::{map_row, row_peak, Curve, Srgb};
+use crate::hdr::{looks_blank, map_row, mean_bgra, mean_mapped, row_peak, Curve, Srgb, SAMPLE};
 use std::io::Write;
 use windows::core::Interface;
 use windows::Win32::Foundation::HMODULE;
@@ -34,6 +35,9 @@ use windows_sys::Win32::Foundation::{BOOL, LPARAM, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
 };
+
+/// How many frames to try when Desktop Duplication hands over an empty one.
+const FRAME_ATTEMPTS: u32 = 3;
 
 /// A monitor with HDR on.
 struct HdrMonitor {
@@ -198,43 +202,72 @@ unsafe fn tone_map_monitor(mon: &HdrMonitor, area: IRect, dst_rect: IRect, dst: 
         .DuplicateOutput1(&device, 0, &[DXGI_FORMAT_R16G16B16A16_FLOAT])
         .map_err(|e| err("DuplicateOutput1", e))?;
 
-    // The first frame of a new duplication holds the whole desktop.
-    let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
-    let mut resource: Option<IDXGIResource> = None;
-    dup.AcquireNextFrame(500, &mut info, &mut resource).map_err(|e| err("AcquireNextFrame", e))?;
-    let result = (|| -> Result<(), String> {
-        let tex: ID3D11Texture2D =
-            resource.as_ref().ok_or("no desktop texture")?.cast().map_err(|e| err("ID3D11Texture2D", e))?;
-        let mut desc = D3D11_TEXTURE2D_DESC::default();
-        tex.GetDesc(&mut desc);
-        if desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT {
-            return Err(format!("desktop format {:?} is not scRGB", desc.Format));
+    let local = IRect { x: area.x - mon.rect.x, y: area.y - mon.rect.y, ..area };
+    let staging_desc = D3D11_TEXTURE2D_DESC {
+        Width: local.w as u32,
+        Height: local.h as u32,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Usage: D3D11_USAGE_STAGING,
+        BindFlags: 0,
+        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+        MiscFlags: 0,
+    };
+    let mut staging = None;
+    device.CreateTexture2D(&staging_desc, None, Some(&mut staging)).map_err(|e| err("CreateTexture2D", e))?;
+    let staging = staging.ok_or("no staging texture")?;
+    let bx = D3D11_BOX {
+        left: local.x as u32,
+        top: local.y as u32,
+        front: 0,
+        right: (local.x + local.w) as u32,
+        bottom: (local.y + local.h) as u32,
+        back: 1,
+    };
+    // What BitBlt saw there, to check the frame against before it is written over it.
+    let stride = dst_rect.w as usize * 4;
+    let x0 = (area.x - dst_rect.x) as usize * 4;
+    let y0 = (area.y - dst_rect.y) as usize;
+    let row_end = x0 + local.w as usize * 4;
+    let (mut sum, mut n) = (0u64, 0u64);
+    for r in dst.chunks(stride).skip(y0).take(local.h as usize).step_by(SAMPLE) {
+        let (s, c) = mean_bgra(&r[x0..row_end]);
+        sum += s;
+        n += c;
+    }
+    let sdr_mean = sum as f32 / n.max(1) as f32;
+
+    // The first frame of a new duplication should hold the whole desktop, but some drivers
+    // hand over an empty (black) one first: then the next frame is tried. On a screen where
+    // nothing moves no next frame comes, and BitBlt's picture stays.
+    let mut why = String::new();
+    for attempt in 1..=FRAME_ATTEMPTS {
+        let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
+        let mut resource: Option<IDXGIResource> = None;
+        let wait = if attempt == 1 { 500 } else { 250 };
+        if let Err(e) = dup.AcquireNextFrame(wait, &mut info, &mut resource) {
+            if e.code() == DXGI_ERROR_WAIT_TIMEOUT && attempt > 1 {
+                return Err(format!("{why}; no further frame within {wait} ms"));
+            }
+            return Err(err("AcquireNextFrame", e));
         }
-        let local = IRect { x: area.x - mon.rect.x, y: area.y - mon.rect.y, ..area };
-        let staging_desc = D3D11_TEXTURE2D_DESC {
-            Width: local.w as u32,
-            Height: local.h as u32,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-            Usage: D3D11_USAGE_STAGING,
-            BindFlags: 0,
-            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-            MiscFlags: 0,
-        };
-        let mut staging = None;
-        device.CreateTexture2D(&staging_desc, None, Some(&mut staging)).map_err(|e| err("CreateTexture2D", e))?;
-        let staging = staging.ok_or("no staging texture")?;
-        let bx = D3D11_BOX {
-            left: local.x as u32,
-            top: local.y as u32,
-            front: 0,
-            right: (local.x + local.w) as u32,
-            bottom: (local.y + local.h) as u32,
-            back: 1,
-        };
-        context.CopySubresourceRegion(&staging, 0, 0, 0, 0, &tex, 0, Some(&bx));
+        let copied = (|| -> Result<(), String> {
+            let tex: ID3D11Texture2D =
+                resource.as_ref().ok_or("no desktop texture")?.cast().map_err(|e| err("ID3D11Texture2D", e))?;
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            tex.GetDesc(&mut desc);
+            if desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT {
+                return Err(format!("desktop format {:?} is not scRGB", desc.Format));
+            }
+            context.CopySubresourceRegion(&staging, 0, 0, 0, 0, &tex, 0, Some(&bx));
+            Ok(())
+        })();
+        // The copy is on the GPU: the frame can go back at once.
+        let _ = dup.ReleaseFrame();
+        copied?;
+
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)).map_err(|e| err("Map", e))?;
         // Straight from the mapped texture into the screenshot: no extra copy of the screen.
@@ -245,15 +278,26 @@ unsafe fn tone_map_monitor(mon: &HdrMonitor, area: IRect, dst_rect: IRect, dst: 
         let peak = rows.iter().map(|r| row_peak(r, mon.white)).fold(0.0f32, f32::max);
         let curve = Curve::new(peak);
         let srgb = Srgb::default();
-        let stride = dst_rect.w as usize * 4;
-        let x0 = (area.x - dst_rect.x) as usize * 4;
-        let y0 = (area.y - dst_rect.y) as usize;
-        let mut out: Vec<&mut [u8]> = dst
-            .chunks_mut(stride)
-            .skip(y0)
-            .take(local.h as usize)
-            .map(|r| &mut r[x0..x0 + local.w as usize * 4])
-            .collect();
+        let (mut sum, mut n) = (0u64, 0u64);
+        for r in rows.iter().step_by(SAMPLE) {
+            let (s, c) = mean_mapped(r, mon.white, &curve, &srgb);
+            sum += s;
+            n += c;
+        }
+        let hdr_mean = sum as f32 / n.max(1) as f32;
+        let frame = format!(
+            "frame {attempt}: present time {}, {} frames, peak {peak:.2}x SDR white, average {hdr_mean:.0} \
+             (normal screenshot {sdr_mean:.0})",
+            info.LastPresentTime, info.AccumulatedFrames
+        );
+        if looks_blank(hdr_mean, sdr_mean) {
+            context.Unmap(&staging, 0);
+            log(&format!("monitor {:?}: {frame}: looks empty, not used", mon.rect));
+            why = format!("frame {attempt} looked empty");
+            continue;
+        }
+        let mut out: Vec<&mut [u8]> =
+            dst.chunks_mut(stride).skip(y0).take(local.h as usize).map(|r| &mut r[x0..row_end]).collect();
         // On all cores: about 8 million pixels at 4K.
         let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 16);
         let per = rows.len().div_ceil(threads).max(1);
@@ -269,16 +313,14 @@ unsafe fn tone_map_monitor(mon: &HdrMonitor, area: IRect, dst_rect: IRect, dst: 
         });
         context.Unmap(&staging, 0);
         log(&format!(
-            "monitor {:?}: SDR white {:.0} nits, peak {:.2}x SDR white{}",
+            "monitor {:?}: SDR white {:.0} nits, {frame}{}",
             mon.rect,
             mon.white * 80.0,
-            peak,
             if curve.is_identity() { " (no highlights, unchanged)" } else { ", highlights compressed" }
         ));
-        Ok(())
-    })();
-    let _ = dup.ReleaseFrame();
-    result
+        return Ok(());
+    }
+    Err(why)
 }
 
 /// Replaces the HDR monitors' part of a BitBlt screenshot (`rect`, BGRA pixels `bgra`) with a
