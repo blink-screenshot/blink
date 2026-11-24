@@ -2,6 +2,20 @@
 
 All notable changes to Blink, per version. Every version is on [GitHub](https://github.com/blink-screenshot/blink/releases) with its installer; the release notes are taken from this file.
 
+## [1.6.2] - 2026-11-24
+
+### New features
+
+- **Copy a whole table with one click.** In the capture overlay's *Text* mode, move the mouse onto the border of a table: the whole table lights up, and a click copies it as a table. Inside the table, pointing still copies the line under the mouse, as before.
+
+### Improvements
+
+- **Tables with borders come out right.** When a table has lines between its rows and columns, Blink now follows those lines: a cell with two lines of text stays one cell instead of becoming an extra row, and a header that starts to the left of the values under it lands in their column. This works in the capture overlay and when you select text in the editor.
+
+### Bug fixes
+
+- **Headers in the wrong column.** In tables without borders, a long header over centred values (for example a column of crosses) could end up in the column next to it.
+
 ## [1.6.1] - 2026-11-24
 
 ### Bug fixes

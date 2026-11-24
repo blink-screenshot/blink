@@ -114,6 +114,8 @@ pub(crate) fn join_words<'a>(words: impl Iterator<Item = &'a str>) -> String {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Page {
     pub lines: Vec<Line>,
+    /// The tables drawn with lines in the image (see `crate::grid`).
+    pub grids: Vec<crate::grid::Grid>,
 }
 
 impl Page {
@@ -279,10 +281,24 @@ impl Page {
     pub fn extract(&self, words: &[usize]) -> Extract {
         let set: std::collections::HashSet<usize> = words.iter().copied().collect();
         let picked: Vec<&Word> = self.words().filter(|(i, _, _)| set.contains(i)).map(|(_, _, w)| w).collect();
-        match crate::table::detect(&picked) {
+        match crate::table::detect(&picked, &self.grids) {
             Some(table) => Extract { text: table.tsv(), table: Some(table) },
             None => Extract { text: self.text_of(words), table: None },
         }
+    }
+
+    /// The tables drawn with lines that hold a table of text: where each is, and its text.
+    /// The capture overlay copies one with a click on its border.
+    pub fn tables(&self) -> Vec<(Bounds, crate::table::Table)> {
+        self.grids
+            .iter()
+            .filter_map(|g| {
+                let inside = g.bounds.expand(2.0);
+                let words: Vec<&Word> =
+                    self.words().map(|(_, _, w)| w).filter(|w| inside.contains(w.rect.cx(), w.rect.cy())).collect();
+                crate::table::detect(&words, std::slice::from_ref(g)).map(|t| (g.bounds, t))
+            })
+            .collect()
     }
 
     #[cfg(test)]
@@ -317,11 +333,15 @@ impl Page {
                 w.rect = w.rect.translate(dx, dy);
             }
         }
+        for g in &mut self.grids {
+            g.translate(dx, dy);
+        }
     }
 
     /// Appends the lines of `other` (read after this page: a band below it, the next screen).
     pub fn append(&mut self, other: Page) {
         self.lines.extend(other.lines.into_iter().filter(|l| !l.words.is_empty()));
+        self.grids.extend(other.grids);
     }
 }
 
@@ -452,6 +472,10 @@ pub fn read_with(engine: &dyn Engine, bgra: &[u8], w: u32, h: u32) -> Result<Pag
         }
     }
     page.lines.retain(|l| !l.words.is_empty());
+    // Table borders, in the image as it is (lines need no enlarging to be found).
+    if !page.lines.is_empty() {
+        page.grids = crate::grid::grids(&crate::grid::find(bgra, w, h));
+    }
     Ok(page)
 }
 
@@ -560,7 +584,7 @@ pub(crate) mod tests {
     }
 
     pub fn page(lines: &[(&str, f32, f32)]) -> Page {
-        Page { lines: lines.iter().map(|(t, x, y)| line_at(t, *x, *y, 12.0)).collect() }
+        Page { lines: lines.iter().map(|(t, x, y)| line_at(t, *x, *y, 12.0)).collect(), ..Default::default() }
     }
 
     #[test]
@@ -570,7 +594,7 @@ pub(crate) mod tests {
         assert_eq!(p.word_count(), 4);
         assert_eq!(p.text_of(&[1, 2]), "world\nsecond");
         // Chinese characters are not separated by spaces, Latin words around them are.
-        let cjk = Page { lines: vec![line_at("在 这 里 OK", 0.0, 0.0, 12.0)] };
+        let cjk = Page { lines: vec![line_at("在 这 里 OK", 0.0, 0.0, 12.0)], ..Default::default() };
         assert_eq!(cjk.all_text(), "在这里 OK");
     }
 
@@ -593,6 +617,24 @@ pub(crate) mod tests {
         // Past the end of the first line: its last word.
         assert_eq!(p.nearest_word(500.0, 6.0), Some(2));
         assert_eq!(p.words_in(&Bounds::new(-1.0, -1.0, 60.0, 40.0)), vec![0, 3]);
+    }
+
+    #[test]
+    fn tables_drawn_with_lines_are_found_and_move_with_the_page() {
+        let img = crate::grid::tests::table_image(400, 200, &[10, 200, 390], &[10, 50, 90, 130]);
+        let mut p = page(&[("Name", 20.0, 20.0), ("Total", 210.0, 20.0), ("Tea", 20.0, 60.0), ("4", 210.0, 60.0)]);
+        p.lines.push(line_at("Coffee", 20.0, 100.0, 12.0));
+        p.lines.push(line_at("12", 210.0, 100.0, 12.0));
+        p.grids = crate::grid::grids(&crate::grid::find(&img, 400, 200));
+        let mut other = Page::default();
+        other.append(p);
+        other.translate(1000.0, 0.0);
+        let tables = other.tables();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].0.x, 1010.5);
+        assert_eq!(tables[0].1.tsv(), "Name\tTotal\nTea\t4\nCoffee\t12");
+        // Plain text is no table.
+        assert!(page(&[("Hello world", 0.0, 0.0)]).tables().is_empty());
     }
 
     #[test]

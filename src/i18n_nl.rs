@@ -615,6 +615,7 @@ pub const NL: &[(&str, &str)] = &[
     ("Save as (Ctrl+S)", "Opslaan als (Ctrl+S)"),
     ("Table copied", "Tabel gekopieerd"),
     ("Table, {0} columns × {1} rows", "Tabel, {0} kolommen × {1} rijen"),
+    ("Click to copy the whole table", "Klik om de hele tabel te kopiëren"),
     ("The screenshot opens in a small window that stays above other windows, to keep it in view while you work. Its bar has Copy, Save as, Edit and opacity.", "De screenshot opent in een klein venster dat boven andere vensters blijft, zodat je hem in beeld houdt terwijl je werkt. De balk heeft Kopiëren, Opslaan als, Bewerken en doorzichtigheid."),
     ("Zoom (Ctrl + scroll). Click for 100%.", "Zoomen (Ctrl + scrollen). Klik voor 100%."),
     ("&Pin", "&Vastzetten"),
