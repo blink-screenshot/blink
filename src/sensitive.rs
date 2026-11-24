@@ -825,7 +825,7 @@ mod tests {
         assert!(f[0].rect.x > p.lines[0].words[0].rect.right() - 3.0);
 
         // Part of a word: "pwd=secret1" -> only the value, estimated from the characters.
-        let p = Page { lines: vec![line_at("pwd=secret1", 0.0, 0.0, 12.0)] };
+        let p = Page { lines: vec![line_at("pwd=secret1", 0.0, 0.0, 12.0)], ..Default::default() };
         let f = scan(&p);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].text, "secret1");

@@ -615,6 +615,7 @@ pub const DE: &[(&str, &str)] = &[
     ("Save as (Ctrl+S)", "Speichern unter (Ctrl+S)"),
     ("Table copied", "Tabelle kopiert"),
     ("Table, {0} columns × {1} rows", "Tabelle, {0} Spalten × {1} Zeilen"),
+    ("Click to copy the whole table", "Klicken, um die ganze Tabelle zu kopieren"),
     ("The screenshot opens in a small window that stays above other windows, to keep it in view while you work. Its bar has Copy, Save as, Edit and opacity.", "Der Screenshot öffnet sich in einem kleinen Fenster, das über anderen Fenstern bleibt, damit du ihn beim Arbeiten im Blick hast. Die Leiste hat Kopieren, Speichern unter, Bearbeiten und Deckkraft."),
     ("Zoom (Ctrl + scroll). Click for 100%.", "Zoom (Ctrl + Mausrad). Klicken für 100 %."),
     ("&Pin", "An&heften"),

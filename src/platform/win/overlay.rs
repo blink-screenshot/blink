@@ -145,6 +145,10 @@ struct State {
     qr_rx: Option<Receiver<Vec<(IRect, String)>>>,
     /// Region and text mode, pointing at a QR code: which one.
     qr_hover: Option<usize>,
+    /// Text mode: where the tables drawn with lines are (client coordinates), once read.
+    tables: Vec<ocr::Bounds>,
+    /// Text mode, pointing at the border of a table: which one (a click copies all of it).
+    table_hover: Option<usize>,
 }
 
 thread_local! {
@@ -261,6 +265,8 @@ pub fn select(shot: &Shot, windows: Vec<WinInfo>, mode: Mode, magnifier: bool) -
             qr: Vec::new(),
             qr_rx: None,
             qr_hover: None,
+            tables: Vec::new(),
+            table_hover: None,
         };
         STATE.with(|s| *s.borrow_mut() = Some(state));
 
@@ -454,6 +460,7 @@ fn cursor_monitor_rect(s: &State) -> IRect {
 fn update_hover(s: &mut State) {
     s.text_hover = None;
     s.qr_hover = None;
+    s.table_hover = None;
     let ctrl = unsafe { GetKeyState(VK_CONTROL as i32) } < 0;
     // On a QR code (region and text mode): the code, to copy what it says.
     if matches!(s.mode, Mode::Region | Mode::Text) {
@@ -474,10 +481,27 @@ fn update_hover(s: &mut State) {
             return;
         }
         Mode::Text => {
-            // On text: its line, or with Ctrl its paragraph. Elsewhere: the window, as in
-            // region mode.
+            // On the border of a table: the whole table. On text: its line, or with Ctrl its
+            // paragraph. Elsewhere: the window, as in region mode.
             if let TextState::Ready(page) = &s.text {
                 let (x, y) = (s.cur.0 as f32, s.cur.1 as f32);
+                let edge = 5.0 * s.scale;
+                let on_border = |b: &ocr::Bounds| {
+                    b.expand(edge).contains(x, y)
+                        && !(b.w > 2.0 * edge && b.h > 2.0 * edge && b.expand(-edge).contains(x, y))
+                };
+                if let Some(i) = s.tables.iter().position(on_border) {
+                    let r = s.tables[i].expand(2.0 * s.scale);
+                    let rect = IRect::from_ltrb(
+                        r.x.floor() as i32,
+                        r.y.floor() as i32,
+                        r.right().ceil() as i32,
+                        r.bottom().ceil() as i32,
+                    );
+                    s.hover = Some(rect.intersect(&client_bounds(s)));
+                    s.table_hover = Some(i);
+                    return;
+                }
                 if let Some(li) = page.line_at(x, y, 4.0 * s.scale) {
                     let lines: Vec<usize> = if ctrl { page.paragraph(li).collect() } else { vec![li] };
                     let r = lines.iter().map(|&l| page.lines[l].rect()).reduce(|a, b| a.union(&b));
@@ -613,7 +637,10 @@ fn text_read(s: &mut State) {
     let TextState::Reading(rx) = &s.text else { return };
     let Ok(result) = rx.try_recv() else { return };
     s.text = match result {
-        Ok(page) => TextState::Ready(page),
+        Ok(page) => {
+            s.tables = page.tables().into_iter().map(|(b, _)| b).collect();
+            TextState::Ready(page)
+        }
         Err(e) => TextState::Failed(e),
     };
     s.redraw_all = true;
@@ -901,8 +928,14 @@ unsafe fn decorations(s: &State, dc: HDC, draw: bool) -> Vec<IRect> {
             None if s.mode == Mode::Text => text_label(s, sel),
             None => format!("{} × {}", sel.w, sel.h),
         };
-        if let Some((_, hint)) = qr {
-            // What a click does, under the code.
+        // What a click does: copy what a QR code says, or a whole table.
+        let hint = match qr {
+            Some((_, hint)) => Some(hint),
+            None if s.table_hover.is_some() && !s.dragging => Some(t("Click to copy the whole table")),
+            None => None,
+        };
+        if let Some(hint) = hint {
+            // What a click does, under the code or table.
             if let Some(label) = capture_bar::label(hint, DARK.panel, Some(DARK.border), DARK.text, sc, fonts) {
                 let (lw, lh) = (label.width() as i32, label.height() as i32);
                 let gap = mark_w + (6.0 * sc) as i32;
@@ -1158,7 +1191,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     Some(Some(Hit::Grip)) => IDC_SIZEALL,
                     Some(_) => IDC_ARROW,
                     // A hand over a QR code: a click copies it.
-                    None if s.qr_hover.is_some() && !s.dragging => IDC_HAND,
+                    None if (s.qr_hover.is_some() || s.table_hover.is_some()) && !s.dragging => IDC_HAND,
                     None => IDC_CROSS,
                 }
             })
