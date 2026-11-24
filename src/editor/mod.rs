@@ -769,6 +769,24 @@ impl EditorApp {
         }
     }
 
+    /// Pins the screenshot as it looks now (annotations, background) to the screen, in a
+    /// window of its own that stays on top. The editor stays open.
+    pub fn pin(&mut self) {
+        self.finish_text_edit();
+        let path = imageio::temp_raw_path();
+        let result = imageio::write_raw(&path, &self.export()).map_err(|e| e.to_string()).and_then(|()| {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            std::process::Command::new(exe).arg("--pin-raw").arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
+        });
+        match result {
+            Ok(()) => self.toast(t("Pinned to the screen"), false),
+            Err(e) => {
+                std::fs::remove_file(&path).ok();
+                self.toast(tf("Could not pin it: {0}", &[&e]), true);
+            }
+        }
+    }
+
     fn save_to(&mut self, ctx: &egui::Context, mut path: PathBuf) {
         if path.extension().is_none() {
             path.set_extension(self.config.format.ext());
@@ -963,7 +981,7 @@ impl EditorApp {
         if copy {
             // With text selected in the text tool, Ctrl+C copies that text.
             if self.tool == Tool::SelectText && !self.text_sel.is_empty() {
-                self.copy_selected_text();
+                self.copy_selected_text(false);
             } else {
                 self.copy(ctx);
             }
@@ -977,6 +995,7 @@ impl EditorApp {
                     Key::Y => self.redo(),
                     Key::S if m.shift => self.save_as(ctx),
                     Key::S => self.save_quick(ctx),
+                    Key::P => self.pin(),
                     Key::Num0 => {
                         self.zoom = None;
                         self.pan = Vec2::ZERO;

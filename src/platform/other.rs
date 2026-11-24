@@ -28,7 +28,15 @@ pub fn cursor_monitor() -> Option<MonitorInfo> {
     None
 }
 
+pub fn monitor_info_at(_x: i32, _y: i32) -> Option<MonitorInfo> {
+    None
+}
+
 pub fn place_editor_window(_hwnd: isize, _w: i32, _h: i32, _maximize: bool) {}
+
+pub fn place_pin_window(_hwnd: isize, _at: Option<(i32, i32)>, _bar_px: i32) {}
+
+pub fn set_window_opacity(_hwnd: isize, _alpha: u8) {}
 
 pub fn open_folder(path: &std::path::Path) {
     let _ = std::process::Command::new("xdg-open").arg(path).spawn();

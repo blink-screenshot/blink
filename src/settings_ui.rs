@@ -443,12 +443,16 @@ impl SettingsApp {
             ui,
             &mut c.after_capture_ask,
             t("Ask me what to do"),
-            Some(("ask", t("A small menu appears at the mouse pointer after each capture: open in editor, copy, or save. Esc discards the screenshot. The choices below are then not used."))),
+            Some(("ask", t("A small menu appears at the mouse pointer after each capture: open in editor, copy, save or pin. Esc discards the screenshot. The choices below are then not used."))),
         );
         ui.add_enabled_ui(!c.after_capture_ask, |ui| {
             ui.checkbox(&mut c.after_capture_open_editor, t("Open in editor"));
             ui.checkbox(&mut c.after_capture_copy, t("Copy to clipboard"));
             ui.checkbox(&mut c.after_capture_save, t("Save to output folder"));
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut c.after_capture_pin, t("Pin to the screen"));
+                info(ui, "pin", t("The screenshot opens in a small window that stays above other windows, to keep it in view while you work. Its bar has Copy, Save as, Edit and opacity."));
+            });
         });
 
         section(ui, t("System"));

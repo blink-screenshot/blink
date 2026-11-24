@@ -242,6 +242,18 @@ pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
     cb.set_text(text).map_err(|e| e.to_string())
 }
 
+/// Copies picked text; a table goes on the clipboard as HTML (Word, Outlook, Teams and Excel
+/// paste a real table) with the tab-separated text next to it for everything else.
+pub fn copy_extract_to_clipboard(e: &crate::ocr::Extract) -> Result<(), String> {
+    match &e.table {
+        Some(table) => {
+            let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+            cb.set_html(table.html(), Some(e.text.clone())).map_err(|e| e.to_string())
+        }
+        None => copy_text_to_clipboard(&e.text),
+    }
+}
+
 pub fn image_from_clipboard() -> Result<RgbaImage, String> {
     let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     if let Ok(data) = cb.get_image() {

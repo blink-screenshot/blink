@@ -229,7 +229,13 @@ pub(crate) fn cursor_pos() -> POINT {
 }
 
 pub fn cursor_monitor() -> Option<MonitorInfo> {
-    let (_, work, scale) = monitor_at(cursor_pos())?;
+    let p = cursor_pos();
+    monitor_info_at(p.x, p.y)
+}
+
+/// The monitor at (or nearest to) a point in physical pixels.
+pub fn monitor_info_at(x: i32, y: i32) -> Option<MonitorInfo> {
+    let (_, work, scale) = monitor_at(POINT { x, y })?;
     Some(MonitorInfo {
         work_left: work.left,
         work_top: work.top,
@@ -258,6 +264,55 @@ pub fn place_editor_window(hwnd: isize, w: i32, h: i32, maximize: bool) {
             ShowWindow(hwnd, SW_MAXIMIZE);
         }
         SetForegroundWindow(hwnd);
+    }
+}
+
+/// Places a pinned screenshot so its image covers the spot it was taken from (`at`: the top
+/// left of the capture, physical pixels; the bar of `bar_px` goes above it), or in the middle
+/// of the monitor under the mouse; inside the work area either way. Activates it.
+pub fn place_pin_window(hwnd: isize, at: Option<(i32, i32)>, bar_px: i32) {
+    let hwnd = hwnd as HWND;
+    unsafe {
+        let mut r: RECT = std::mem::zeroed();
+        if GetWindowRect(hwnd, &mut r) != 0 && r.right > r.left {
+            let (w, h) = (r.right - r.left, r.bottom - r.top);
+            let anchor = at.map_or_else(cursor_pos, |(x, y)| POINT { x, y });
+            if let Some((_, work, _)) = monitor_at(anchor) {
+                let (x, y) = match at {
+                    Some((x, y)) => (x, y - bar_px),
+                    None => (
+                        work.left + (work.right - work.left - w).max(0) / 2,
+                        work.top + (work.bottom - work.top - h).max(0) / 2,
+                    ),
+                };
+                let x = x.min(work.right - w).max(work.left);
+                let y = y.min(work.bottom - h).max(work.top);
+                SetWindowPos(hwnd, HWND_TOP, x, y, 0, 0, SWP_NOZORDER | SWP_NOSIZE);
+            }
+        }
+        SetForegroundWindow(hwnd);
+    }
+}
+
+/// Makes a window see-through: 255 is opaque.
+pub fn set_window_opacity(hwnd: isize, alpha: u8) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, LWA_ALPHA, WS_EX_LAYERED,
+    };
+    let hwnd = hwnd as HWND;
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let layered = WS_EX_LAYERED as isize;
+        if alpha == 255 {
+            if ex & layered != 0 {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex & !layered);
+            }
+            return;
+        }
+        if ex & layered == 0 {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | layered);
+        }
+        SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
     }
 }
 

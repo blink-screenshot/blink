@@ -50,9 +50,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 pub struct Outcome {
     pub rect: IRect,
     pub scroll: bool,
-    /// Text mode: the text that was picked (empty when there was none), or why it could not
-    /// be read.
-    pub text: Option<Result<String, OcrError>>,
+    /// Text mode: the text that was picked (empty when there was none; a table when the
+    /// words form one), or why it could not be read.
+    pub text: Option<Result<ocr::Extract, OcrError>>,
     /// A click on a QR code: what it says, and whether to open it (Ctrl+click on a web link)
     /// instead of copying it.
     pub qr: Option<(String, bool)>,
@@ -623,13 +623,14 @@ fn text_read(s: &mut State) {
     }
 }
 
-/// The text a text-mode pick copies: whole lines, or the words inside `rect`.
-fn picked_text(page: &Page, rect: IRect, lines: Option<&[usize]>) -> String {
+/// The text a text-mode pick copies: whole lines, or the words inside `rect`; as a table
+/// when they form one.
+fn picked_text(page: &Page, rect: IRect, lines: Option<&[usize]>) -> ocr::Extract {
     match lines {
-        Some(lines) => page.lines_text(lines),
+        Some(lines) => page.extract(&page.lines_words(lines)),
         None => {
             let b = ocr::Bounds::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
-            page.text_of(&page.words_in(&b))
+            page.extract(&page.words_in(&b))
         }
     }
 }
@@ -645,11 +646,13 @@ fn text_label(s: &State, sel: IRect) -> String {
         TextState::Failed(_) => t("Text recognition is not available").to_string(),
         TextState::Ready(page) => {
             let lines = if s.dragging { None } else { s.text_hover.as_deref() };
-            let text = picked_text(page, sel, lines);
-            if text.is_empty() {
+            let picked = picked_text(page, sel, lines);
+            if picked.is_empty() {
                 t("No text here").to_string()
+            } else if let Some(table) = picked.table_label() {
+                table
             } else {
-                ocr::preview(&text, 48)
+                ocr::preview(&picked.text, 48)
             }
         }
     }

@@ -198,6 +198,13 @@ pub fn toolbar(app: &mut EditorApp, ctx: &egui::Context) {
                     if ui.button(t("Save as...")).on_hover_text(t("Save as (Ctrl+Shift+S)")).clicked() {
                         app.save_as(ctx);
                     }
+                    if ui
+                        .button(t("Pin"))
+                        .on_hover_text(t("Pin to the screen: keep the screenshot in view above other windows (Ctrl+P)"))
+                        .clicked()
+                    {
+                        app.pin();
+                    }
                     ui.add_space(6.0);
                     let can_redo = !app.redo.is_empty();
                     let can_undo = !app.undo.is_empty();
@@ -1112,7 +1119,7 @@ fn text_props(ui: &mut Ui, ctx: &egui::Context, app: &mut EditorApp) {
         }
         let any = !app.text_sel.is_empty();
         if ui.add_enabled(any, egui::Button::new(t("Copy selection"))).on_hover_text("Ctrl+C").clicked() {
-            app.copy_selected_text();
+            app.copy_selected_text(false);
         }
         if ui
             .add_enabled(any, egui::Button::new(t("Hide selection")))
@@ -1316,7 +1323,7 @@ pub fn shortcuts_window(app: &mut EditorApp, ctx: &egui::Context) {
                     }
                 });
                 section(&mut cols[1], t("Editing"));
-                let rows: [(&str, &str); 19] = [
+                let rows: [(&str, &str); 20] = [
                     ("Ctrl", t("Hold: select / move with any tool")),
                     ("Shift", t("While drawing: straight lines, squares")),
                     ("Del", t("Delete the selection")),
@@ -1328,6 +1335,7 @@ pub fn shortcuts_window(app: &mut EditorApp, ctx: &egui::Context) {
                     ("Ctrl+A", t("Select all text (OCR tool)")),
                     ("Ctrl+S", t("Save to the screenshots folder")),
                     ("Ctrl+Shift+S", t("Save as")),
+                    ("Ctrl+P", t("Pin to the screen")),
                     (t("Space+drag"), t("Pan")),
                     (t("Middle mouse"), t("Pan")),
                     (t("Ctrl+wheel"), t("Zoom")),

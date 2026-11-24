@@ -107,6 +107,8 @@ enum Action {
     RecordingGif,
     /// Copies the file of the notification as a file (not a menu item).
     CopyRecording,
+    /// Pins the screenshot of the current notification to the screen (not a menu item).
+    PinCapture,
 }
 
 /// Menu ids of the History submenu: `HISTORY_BASE + index`.
@@ -150,6 +152,9 @@ thread_local! {
     static BALLOON_CLICK: Cell<Option<Action>> = const { Cell::new(None) };
     /// The screenshot the current balloon is about (a raw temp file), for `EditCapture`.
     static BALLOON_IMAGE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    /// Where on the screen that screenshot was taken (its top left, physical pixels), so
+    /// "Pin" can put it back on that spot.
+    static BALLOON_ORIGIN: Cell<Option<(i32, i32)>> = const { Cell::new(None) };
     /// The toast with the Edit / Save buttons that is on screen (or in the notification
     /// center), with its number. Presses of any other toast are stale and ignored.
     static CAPTURE_TOAST: RefCell<Option<(u32, ToastNotification)>> = const { RefCell::new(None) };
@@ -436,13 +441,16 @@ fn hide_balloon(hwnd: HWND) {
 /// the screenshot in the editor, Save saves it to the output folder (left out when it was
 /// saved already), Save as asks where. Clicking the toast itself opens the editor. False if
 /// Windows refused it.
-fn show_capture_toast(hwnd: HWND, title: &str, text: &str, saved: bool) -> bool {
+fn show_capture_toast(hwnd: HWND, title: &str, text: &str, saved: bool, pinned: bool) -> bool {
     let edit = Action::EditCapture as u32;
     let mut buttons = vec![Button { label: t("Edit"), action: edit }];
     if !saved {
         buttons.push(Button { label: t("Save"), action: Action::SaveCapture as u32 });
     }
     buttons.push(Button { label: t("Save as"), action: Action::SaveCaptureAs as u32 });
+    if !pinned {
+        buttons.push(Button { label: t("Pin"), action: Action::PinCapture as u32 });
+    }
     show_toast(hwnd, title, text, edit, &buttons)
 }
 
@@ -473,6 +481,7 @@ fn hide_capture_toast() {
 }
 
 fn discard_balloon_image() {
+    BALLOON_ORIGIN.with(|c| c.set(None));
     if let Some(path) = BALLOON_IMAGE.with(|c| c.borrow_mut().take()) {
         std::fs::remove_file(path).ok();
     }
@@ -981,6 +990,7 @@ enum AfterCapture {
     Edit = 1,
     Copy,
     Save,
+    Pin,
 }
 
 /// Small menu at the mouse pointer to choose what happens with a new screenshot.
@@ -992,10 +1002,12 @@ unsafe fn ask_after_capture(hwnd: HWND, img: &RgbaImage) -> Option<AfterCapture>
     m.add(AfterCapture::Edit as usize, Icon::Edit, t("Open in &editor"));
     m.add(AfterCapture::Copy as usize, Icon::Clipboard, t("&Copy to clipboard"));
     m.add(AfterCapture::Save as usize, Icon::Save, t("&Save to screenshots folder"));
+    m.add(AfterCapture::Pin as usize, Icon::Pin, t("&Pin to the screen"));
     match m.track(hwnd) {
         1 => Some(AfterCapture::Edit),
         2 => Some(AfterCapture::Copy),
         3 => Some(AfterCapture::Save),
+        4 => Some(AfterCapture::Pin),
         _ => None,
     }
 }
@@ -1058,7 +1070,7 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
                         Some(out) if out.text.is_some() => {
                             let img = shot.crop_rgba(out.rect);
                             drop(shot);
-                            deliver_text(hwnd, out.text.unwrap_or(Ok(String::new())), img);
+                            deliver_text(hwnd, out.text.unwrap_or(Ok(ocr::Extract::default())), img);
                             None
                         }
                         Some(out) if out.scroll => {
@@ -1110,12 +1122,14 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
             let p = Pointer { img: p, x: x - r.x, y: y - r.y };
             p.overlaps(img.width(), img.height()).then_some(p)
         });
-        deliver(hwnd, img, pointer, &c);
+        deliver(hwnd, img, pointer, shown.map(|r| (r.x, r.y)), &c);
     }
     BUSY.with(|b| b.set(false));
 }
 
-fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, c: &Config) {
+/// What happens with a new screenshot. `at`: where on the screen it was taken (its top
+/// left, physical pixels), for a pin.
+fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, at: Option<(i32, i32)>, c: &Config) {
     if c.after_capture_ask {
         let Some(choice) = (unsafe { ask_after_capture(hwnd, &img) }) else { return };
         let chosen = Config {
@@ -1123,9 +1137,10 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, c: &Config) {
             after_capture_open_editor: choice == AfterCapture::Edit,
             after_capture_copy: choice == AfterCapture::Copy,
             after_capture_save: choice == AfterCapture::Save,
+            after_capture_pin: choice == AfterCapture::Pin,
             ..c.clone()
         };
-        return deliver(hwnd, img, pointer, &chosen);
+        return deliver(hwnd, img, pointer, at, &chosen);
     }
     // Copy and Save get the pointer drawn in; the editor gets it as a separate object.
     // Shared with the history thread instead of copied for it (a full screen at 4K is 33 MB).
@@ -1168,9 +1183,30 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, c: &Config) {
             }
         }
     }
+    let mut pinned = false;
+    if c.after_capture_pin {
+        // Its own file: the pin deletes it once read, like the editor deletes its own.
+        let path = imageio::temp_raw_path();
+        match imageio::write_raw(&path, out) {
+            Ok(()) => {
+                pin(&path, at);
+                pinned = true;
+            }
+            Err(e) => {
+                std::fs::remove_file(&path).ok();
+                lines.push(tf("Could not pin it: {0}", &[&e]));
+                warning = true;
+            }
+        }
+    }
     let path = imageio::temp_raw_path();
     let raw = imageio::write_capture(&path, &img, pointer.as_ref());
-    let open = c.after_capture_open_editor || (!c.after_capture_copy && !c.after_capture_save);
+    let open = c.after_capture_open_editor || (!c.after_capture_copy && !c.after_capture_save && !pinned);
+    if pinned && !open && !copied && !saved && !warning {
+        // The pin on the screen says enough.
+        std::fs::remove_file(&path).ok();
+        return;
+    }
     if open {
         match raw {
             Ok(()) => spawn_self(&["--edit-raw", &path.display().to_string()]),
@@ -1192,8 +1228,9 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, c: &Config) {
         balloon(hwnd, title, &lines.join("\n"), warning);
         return;
     }
-    if show_capture_toast(hwnd, title, &lines.join("\n"), saved) {
+    if show_capture_toast(hwnd, title, &lines.join("\n"), saved, pinned) {
         BALLOON_IMAGE.with(|c| *c.borrow_mut() = Some(path));
+        BALLOON_ORIGIN.with(|c| c.set(at));
         return;
     }
     // No toast possible: the balloon can only be clicked, which opens the editor.
@@ -1206,7 +1243,7 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, c: &Config) {
 
 /// Text mode: puts the text on the clipboard and says so with its first words. The capture
 /// goes along with the notification, so "Edit" can open it to select the text exactly.
-fn deliver_text(hwnd: HWND, text: Result<String, OcrError>, img: Option<RgbaImage>) {
+fn deliver_text(hwnd: HWND, text: Result<ocr::Extract, OcrError>, img: Option<RgbaImage>) {
     let raw = img.and_then(|img| {
         let path = imageio::temp_raw_path();
         match imageio::write_raw(&path, &img) {
@@ -1218,8 +1255,12 @@ fn deliver_text(hwnd: HWND, text: Result<String, OcrError>, img: Option<RgbaImag
         }
     });
     let (title, body) = match text {
-        Ok(text) if !text.trim().is_empty() => match imageio::copy_text_to_clipboard(&text) {
-            Ok(()) => (t("Text copied"), ocr::preview(&text, 160)),
+        Ok(text) if !text.is_empty() => match imageio::copy_extract_to_clipboard(&text) {
+            Ok(()) => match text.table_label() {
+                // Pasted in Excel, Word, Outlook or Teams it becomes a table.
+                Some(table) => (t("Table copied"), format!("{table}\n{}", ocr::preview(&text.text, 120))),
+                None => (t("Text copied"), ocr::preview(&text.text, 160)),
+            },
             Err(e) => {
                 discard(raw);
                 return balloon(hwnd, t("Text not copied"), &tf("Copy failed: {0}", &[&e]), true);
@@ -1292,7 +1333,7 @@ fn from_history(hwnd: HWND, id: u64) {
         std::fs::remove_file(&path).ok();
         return balloon(hwnd, title, &body, copied.is_err());
     }
-    if show_capture_toast(hwnd, title, &body, false) {
+    if show_capture_toast(hwnd, title, &body, false, false) {
         BALLOON_IMAGE.with(|c| *c.borrow_mut() = Some(path));
         return;
     }
@@ -1320,6 +1361,16 @@ fn save_capture(hwnd: HWND) {
             spawn_self(&["--edit-raw", &path.display().to_string()]);
             balloon(hwnd, t("Screenshot not saved"), &tf("{0}\nIt is open in the editor instead.", &[&e]), true);
         }
+    }
+}
+
+/// Opens a pinned screenshot of a raw file (it deletes the file once read). `at`: where the
+/// screenshot was taken, so the pin covers that spot.
+fn pin(path: &std::path::Path, at: Option<(i32, i32)>) {
+    let p = path.display().to_string();
+    match at {
+        Some((x, y)) => spawn_self(&["--pin-raw", &p, &x.to_string(), &y.to_string()]),
+        None => spawn_self(&["--pin-raw", &p]),
     }
 }
 
@@ -1540,6 +1591,14 @@ fn run_action(hwnd: HWND, action: Action, from_menu: bool) {
             hide_capture_toast();
         }
         Action::SaveCapture => save_capture(hwnd),
+        Action::PinCapture => {
+            // The pin draws the pointer in and deletes the file.
+            let at = BALLOON_ORIGIN.with(|c| c.take());
+            if let Some(path) = BALLOON_IMAGE.with(|c| c.borrow_mut().take()) {
+                pin(&path, at);
+            }
+            hide_capture_toast();
+        }
         Action::HistoryItem => {
             if let Some(id) = HISTORY_PICK.with(|p| p.take()) {
                 from_history(hwnd, id);
@@ -1609,6 +1668,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     a if a == Action::EditCapture as usize => run_action(hwnd, Action::EditCapture, false),
                     a if a == Action::SaveCapture as usize => run_action(hwnd, Action::SaveCapture, false),
                     a if a == Action::SaveCaptureAs as usize => run_action(hwnd, Action::SaveCaptureAs, false),
+                    a if a == Action::PinCapture as usize => run_action(hwnd, Action::PinCapture, false),
                     a if a == Action::EditCaptureText as usize => run_action(hwnd, Action::EditCaptureText, false),
                     a if a == Action::EditRecording as usize => run_action(hwnd, Action::EditRecording, false),
                     a if a == Action::RecordingGif as usize => run_action(hwnd, Action::RecordingGif, false),

@@ -21,6 +21,7 @@ mod i18n_nl;
 mod i18n_pt;
 mod imageio;
 mod ocr;
+mod pin_ui;
 mod platform;
 mod qr;
 mod rec;
@@ -28,6 +29,7 @@ mod render;
 mod sensitive;
 mod settings_ui;
 mod stitch;
+mod table;
 mod theme;
 mod toast_xml;
 mod update;
@@ -52,6 +54,22 @@ fn main() {
                 let select_text = arg(2) == Some("--select-text");
                 shot.and_then(|(img, pointer)| editor::run_with(img, pointer, None, select_text))
             }
+            None => Err(i18n::t("Missing file path.").into()),
+        },
+        // A pinned screenshot. The optional x and y (physical pixels) are where it was taken,
+        // so the pin covers that spot.
+        Some("--pin-raw") => match arg(1) {
+            Some(p) => {
+                let path = PathBuf::from(p);
+                let img = imageio::read_capture_flat(&path).map_err(|e| e.to_string());
+                std::fs::remove_file(&path).ok();
+                let at = arg(2).zip(arg(3)).and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)));
+                img.and_then(|img| pin_ui::run(img, at))
+            }
+            None => Err(i18n::t("Missing file path.").into()),
+        },
+        Some("--pin") => match arg(1) {
+            Some(p) => imageio::load_image_file(std::path::Path::new(p)).and_then(|img| pin_ui::run(img, None)),
             None => Err(i18n::t("Missing file path.").into()),
         },
         Some("--open") => match arg(1) {

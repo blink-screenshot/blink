@@ -124,6 +124,8 @@ mod tests {
         ("platform/win/overlay.rs", include_str!("platform/win/overlay.rs")),
         ("history.rs", include_str!("history.rs")),
         ("clip_ui.rs", include_str!("clip_ui.rs")),
+        ("pin_ui.rs", include_str!("pin_ui.rs")),
+        ("table.rs", include_str!("table.rs")),
         ("rec/mod.rs", include_str!("rec/mod.rs")),
         ("rec/bar.rs", include_str!("rec/bar.rs")),
         ("rec/keys.rs", include_str!("rec/keys.rs")),
