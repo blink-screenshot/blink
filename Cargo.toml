@@ -42,6 +42,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
     "Win32_UI_HiDpi",
     "Win32_UI_Accessibility",
     "Win32_Media",
@@ -52,6 +53,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Ole",
+    "Win32_System_Com",
     "Win32_Security",
     "Win32_Networking_WinHttp",
 ] }

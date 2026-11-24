@@ -375,7 +375,7 @@ impl Default for Config {
             after_capture_save: false,
             after_capture_pin: false,
             output_dir: pictures.join("Blink"),
-            filename_pattern: "Blink_%Y-%m-%d_%H-%M-%S".into(),
+            filename_pattern: crate::naming::DEFAULT_PATTERN.into(),
             format: ImageFormat::Png,
             jpg_quality: 90,
             start_with_windows: true,
@@ -412,7 +412,13 @@ pub fn config_path() -> PathBuf {
 
 impl Config {
     pub fn load() -> Self {
-        std::fs::read_to_string(config_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        let mut c: Self =
+            std::fs::read_to_string(config_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        // The old default reads as the new one (the same names), so Settings shows it as a preset.
+        if c.filename_pattern == crate::naming::OLD_DEFAULT_PATTERN {
+            c.filename_pattern = crate::naming::DEFAULT_PATTERN.into();
+        }
+        c
     }
 
     /// Whether the windows use the light variant.
@@ -438,40 +444,17 @@ impl Config {
         std::fs::rename(tmp, config_path())
     }
 
-    /// Next free file path in the output folder according to the filename pattern.
-    pub fn next_output_path(&self) -> PathBuf {
-        next_free_path(&self.output_dir, &self.filename_pattern, self.format.ext())
+    /// Next free file path for this capture: the pattern's folders and variables filled in.
+    pub fn next_output_path_for(&self, meta: &crate::naming::Meta) -> PathBuf {
+        crate::naming::path(&self.output_dir, &self.filename_pattern, self.format.ext(), meta)
     }
 }
 
-/// `<dir>/<pattern now>.<ext>`, or with " (2)", " (3)", ... when that exists.
+/// `<dir>/<pattern now>.<ext>`, or with " (2)", " (3)", ... when that exists. A recording:
+/// the pattern's `{mode}` is "recording".
 pub fn next_free_path(dir: &std::path::Path, pattern: &str, ext: &str) -> PathBuf {
-    // An invalid pattern would make chrono panic while formatting: fall back to the default.
-    let mut stem = String::new();
-    {
-        use std::fmt::Write;
-        if write!(stem, "{}", chrono::Local::now().format(pattern)).is_err() {
-            stem = chrono::Local::now().format("Blink_%Y-%m-%d_%H-%M-%S").to_string();
-        }
-    }
-    let stem = sanitize_filename(&stem);
-    let mut path = dir.join(format!("{stem}.{ext}"));
-    let mut n = 2;
-    while path.exists() {
-        path = dir.join(format!("{stem} ({n}).{ext}"));
-        n += 1;
-    }
-    path
-}
-
-fn sanitize_filename(s: &str) -> String {
-    let cleaned: String =
-        s.chars().map(|c| if "<>:\"/\\|?*".contains(c) || c.is_control() { '_' } else { c }).collect();
-    if cleaned.trim().is_empty() {
-        "screenshot".into()
-    } else {
-        cleaned
-    }
+    let meta = crate::naming::Meta { mode: Some("recording".into()), ..Default::default() };
+    crate::naming::path(dir, pattern, ext, &meta)
 }
 
 #[cfg(test)]
@@ -536,6 +519,5 @@ mod tests {
     fn labels() {
         assert_eq!(Hotkeys::default().scrolling.label(), "Ctrl + Shift + Print Screen");
         assert_eq!(Hotkey::none().label(), "(none)");
-        assert_eq!(sanitize_filename("a:b/c"), "a_b_c");
     }
 }

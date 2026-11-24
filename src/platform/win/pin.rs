@@ -69,6 +69,8 @@ const MENU_CLOSE: usize = 6;
 const MENU_OPACITY: usize = 100;
 
 struct Pin {
+    /// What is known about the capture, for the file name of Save as and the editor.
+    meta: crate::naming::Meta,
     /// The screenshot as BGRA rows, top down.
     bgra: Vec<u8>,
     w: u32,
@@ -183,7 +185,7 @@ fn register() -> bool {
 
 /// Pins `img` to the screen. `at`: where it was taken (its top left, physical pixels), so the
 /// pin covers that spot; otherwise it goes in the middle of the monitor under the mouse.
-pub fn open(img: &RgbaImage, at: Option<(i32, i32)>) -> Result<(), String> {
+pub fn open(img: &RgbaImage, at: Option<(i32, i32)>, meta: &crate::naming::Meta) -> Result<(), String> {
     let (w, h) = img.dimensions();
     if w == 0 || h == 0 {
         return Err(t("The image is empty.").into());
@@ -199,6 +201,7 @@ pub fn open(img: &RgbaImage, at: Option<(i32, i32)>) -> Result<(), String> {
     let anchor = at.map_or_else(super::cursor_pos, |(x, y)| POINT { x, y });
     let Some((_, work, scale)) = monitor_at(anchor) else { return Err("monitor".into()) };
     let pin = Box::new(Pin {
+        meta: meta.clone(),
         bgra,
         w,
         h,
@@ -580,6 +583,13 @@ fn hand_off(pin: &Pin) -> Option<std::path::PathBuf> {
     }
 }
 
+fn spawn_meta(args: &[&str], meta: &crate::naming::Meta) {
+    let extra = meta.to_args();
+    let mut all: Vec<&str> = args.to_vec();
+    all.extend(extra.iter().map(String::as_str));
+    spawn_self(&all);
+}
+
 /// What a bar item (or its key or menu item) does.
 fn run(hwnd: HWND, item: Item) {
     let Some(pin) = (unsafe { pin_of(hwnd) }) else { return };
@@ -607,12 +617,12 @@ fn run(hwnd: HWND, item: Item) {
         },
         Item::SaveAs => {
             if let Some(path) = hand_off(pin) {
-                spawn_self(&["--save-raw-as", &path.display().to_string()]);
+                spawn_meta(&["--save-raw-as", &path.display().to_string()], &pin.meta);
             }
         }
         Item::Edit => {
             if let Some(path) = hand_off(pin) {
-                spawn_self(&["--edit-raw", &path.display().to_string()]);
+                spawn_meta(&["--edit-raw", &path.display().to_string()], &pin.meta);
             }
         }
         Item::Zoom => zoom_to(hwnd, pin, 1.0),

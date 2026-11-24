@@ -256,6 +256,8 @@ pub struct EyeTarget {
 }
 
 pub struct EditorApp {
+    /// What is known about the capture, for the file name (Settings > Saving).
+    pub meta: crate::naming::Meta,
     renderer: Renderer,
     fonts: Arc<Fonts>,
     config: Config,
@@ -336,7 +338,7 @@ pub struct EditorApp {
 }
 
 pub fn run(img: RgbaImage, source: Option<PathBuf>) -> Result<(), String> {
-    run_with(img, None, source, false)
+    run_with(img, None, source, false, crate::naming::Meta::default())
 }
 
 /// `run`, starting with the text selection tool when `select_text` (the "text copied"
@@ -347,6 +349,7 @@ pub fn run_with(
     pointer: Option<crate::imageio::Pointer>,
     source: Option<PathBuf>,
     select_text: bool,
+    meta: crate::naming::Meta,
 ) -> Result<(), String> {
     if img.width() == 0 || img.height() == 0 {
         return Err(t("The image is empty.").into());
@@ -395,6 +398,7 @@ pub fn run_with(
             #[cfg(not(windows))]
             let _ = (phys, maximize, light);
             let mut app = EditorApp::new(cc, img);
+            app.meta = meta;
             if let Some(p) = pointer {
                 app.add_pointer(&cc.egui_ctx, p);
             }
@@ -435,6 +439,7 @@ impl EditorApp {
             }
         }
         let mut app = Self {
+            meta: crate::naming::Meta::default(),
             renderer: Renderer::from_image(img, fonts.clone()),
             fonts,
             config,
@@ -758,14 +763,16 @@ impl EditorApp {
 
     pub fn save_quick(&mut self, ctx: &egui::Context) {
         self.finish_text_edit();
-        let path = self.config.next_output_path();
-        self.save_to(ctx, path);
+        let img = self.export();
+        let path = self.config.next_output_path_for(&self.meta.sized(img.width(), img.height()));
+        self.save_image_to(ctx, path, img);
     }
 
     pub fn save_as(&mut self, ctx: &egui::Context) {
         self.finish_text_edit();
-        if let Some(path) = imageio::ask_save_path(&self.config) {
-            self.save_to(ctx, path);
+        let img = self.export();
+        if let Some(path) = imageio::ask_save_path(&self.config, &self.meta.sized(img.width(), img.height())) {
+            self.save_image_to(ctx, path, img);
         }
     }
 
@@ -776,11 +783,17 @@ impl EditorApp {
         let path = imageio::temp_raw_path();
         let result = imageio::write_raw(&path, &self.export()).map_err(|e| e.to_string()).and_then(|()| {
             // The tray shows it at once; without the tray, a pin window of its own.
-            if platform::pin_in_resident(&path, None) {
+            if platform::pin_in_resident(&path, None, &self.meta) {
                 return Ok(());
             }
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            std::process::Command::new(exe).arg("--pin-raw").arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
+            std::process::Command::new(exe)
+                .arg("--pin-raw")
+                .arg(&path)
+                .args(self.meta.to_args())
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| e.to_string())
         });
         match result {
             Ok(()) => self.toast(t("Pinned to the screen"), false),
@@ -791,12 +804,12 @@ impl EditorApp {
         }
     }
 
-    fn save_to(&mut self, ctx: &egui::Context, mut path: PathBuf) {
+    fn save_image_to(&mut self, ctx: &egui::Context, mut path: PathBuf, img: RgbaImage) {
         if path.extension().is_none() {
             path.set_extension(self.config.format.ext());
         }
         let fmt = imageio::format_from_path(&path, self.config.format);
-        match imageio::save_image(&path, &self.export(), fmt, self.config.jpg_quality) {
+        match imageio::save_image(&path, &img, fmt, self.config.jpg_quality) {
             Ok(()) => {
                 self.unsaved = false;
                 self.toast(tf("Saved {0}", &[&path.display()]), false);

@@ -300,14 +300,14 @@ pub(crate) const PIN_COPYDATA: usize = 0x426C_506E;
 
 /// Asks the tray to pin the screenshot in a raw file (it deletes the file): it shows pins
 /// itself, at once. False when the tray is not running; the file is then left alone.
-pub fn pin_in_resident(path: &Path, at: Option<(i32, i32)>) -> bool {
+pub fn pin_in_resident(path: &Path, at: Option<(i32, i32)>, meta: &crate::naming::Meta) -> bool {
     use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, SendMessageW, ASFW_ANY, WM_COPYDATA};
     let class = wide(RESIDENT_CLASS);
-    let text = match at {
-        Some((x, y)) => format!("{x};{y};{}", path.display()),
-        None => format!(";;{}", path.display()),
-    };
+    // ";" cannot be part of a program name or a mode, so it separates them safely.
+    let (x, y) = at.map_or((String::new(), String::new()), |(x, y)| (x.to_string(), y.to_string()));
+    let clean = |s: &Option<String>| s.as_deref().unwrap_or("").replace(';', "_");
+    let text = format!("{x};{y};{};{};{}", clean(&meta.app), clean(&meta.mode), path.display());
     let units: Vec<u16> = text.encode_utf16().collect();
     unsafe {
         let tray = FindWindowW(class.as_ptr(), std::ptr::null());
@@ -386,6 +386,33 @@ pub(crate) fn open_url(url: &str) {
     unsafe {
         ShellExecuteW(std::ptr::null_mut(), op.as_ptr(), u.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
     }
+}
+
+/// Opens `dir` in Explorer with its newest screenshot selected (in its own folder, when the
+/// file name pattern makes folders). Windows offers apps no way to set how Explorer sorts a
+/// folder, so instead the newest file is selected, which also scrolls it into view.
+pub fn open_folder_newest(dir: &Path) {
+    let Some(file) = crate::naming::newest_file(dir) else { return open_folder(dir) };
+    let dir = dir.to_path_buf();
+    // Shell calls need COM: on a thread of their own, so the caller's thread is not touched.
+    std::thread::spawn(move || {
+        use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+        use windows_sys::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
+        let w = wide(&file.display().to_string());
+        let ok = unsafe {
+            CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+            let pidl = ILCreateFromPathW(w.as_ptr());
+            let ok = !pidl.is_null() && SHOpenFolderAndSelectItems(pidl, 0, std::ptr::null(), 0) >= 0;
+            if !pidl.is_null() {
+                ILFree(pidl);
+            }
+            CoUninitialize();
+            ok
+        };
+        if !ok {
+            open_folder(&dir);
+        }
+    });
 }
 
 pub fn open_folder(path: &Path) {

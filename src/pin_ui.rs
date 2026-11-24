@@ -76,7 +76,7 @@ pub fn initial_size(w: u32, h: u32, ppp: f32, max: egui::Vec2, min_w: f32) -> (e
     (vec2(shown.x.max(min_w), shown.y + bar), fit)
 }
 
-pub fn run(img: RgbaImage, at: Option<(i32, i32)>) -> Result<(), String> {
+pub fn run(img: RgbaImage, at: Option<(i32, i32)>, meta: crate::naming::Meta) -> Result<(), String> {
     if img.width() == 0 || img.height() == 0 {
         return Err(t("The image is empty.").into());
     }
@@ -112,7 +112,7 @@ pub fn run(img: RgbaImage, at: Option<(i32, i32)>) -> Result<(), String> {
                 egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw()),
                 egui::TextureOptions::LINEAR,
             );
-            Ok(Box::new(PinApp { img, tex, prefs, hwnd, opacity: 100, toast: None }))
+            Ok(Box::new(PinApp { img, tex, prefs, hwnd, opacity: 100, toast: None, meta }))
         }),
     )
     .map_err(|e| e.to_string())
@@ -142,6 +142,8 @@ fn window_handle(cc: &eframe::CreationContext<'_>) -> Option<isize> {
 }
 
 struct PinApp {
+    /// What is known about the capture, for the file name.
+    meta: crate::naming::Meta,
     img: RgbaImage,
     tex: egui::TextureHandle,
     prefs: PinPrefs,
@@ -180,7 +182,9 @@ impl PinApp {
 
     fn save_as(&mut self) {
         let c = Config::load();
-        let Some(mut path) = imageio::ask_save_path(&c) else { return };
+        let Some(mut path) = imageio::ask_save_path(&c, &self.meta.sized(self.img.width(), self.img.height())) else {
+            return;
+        };
         if path.extension().is_none() {
             path.set_extension(c.format.ext());
         }
@@ -196,7 +200,13 @@ impl PinApp {
         let path = imageio::temp_raw_path();
         let result = imageio::write_raw(&path, &self.img).map_err(|e| e.to_string()).and_then(|()| {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            std::process::Command::new(exe).arg("--edit-raw").arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
+            std::process::Command::new(exe)
+                .arg("--edit-raw")
+                .arg(&path)
+                .args(self.meta.to_args())
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| e.to_string())
         });
         if let Err(e) = result {
             std::fs::remove_file(&path).ok();

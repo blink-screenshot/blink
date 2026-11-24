@@ -490,3 +490,82 @@ pub fn pointer_from_backgrounds(on_black: &[u8], on_white: &[u8], w: u32, h: u32
     }
     RgbaImage::from_raw(w, h, out)
 }
+
+// ---- which program ---------------------------------------------------------------------------
+
+/// The program a window belongs to, by its file name without `.exe` ("chrome", "WINWORD"),
+/// for `{app}` in file names. Store apps live in a frame of "ApplicationFrameHost": the app
+/// is the process of the window inside it.
+pub fn app_of(hwnd: HWND) -> Option<String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetWindowThreadProcessId};
+    if hwnd.is_null() {
+        return None;
+    }
+    let mut pid = 0u32;
+    unsafe {
+        GetWindowThreadProcessId(hwnd, &mut pid);
+    }
+    let name = process_name(pid)?;
+    if !name.eq_ignore_ascii_case("ApplicationFrameHost") {
+        return Some(name);
+    }
+    struct Find {
+        frame: u32,
+        found: u32,
+    }
+    unsafe extern "system" fn child(hwnd: HWND, lp: LPARAM) -> BOOL {
+        let f = &mut *(lp as *mut Find);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid != 0 && pid != f.frame {
+            f.found = pid;
+            return 0;
+        }
+        1
+    }
+    let mut f = Find { frame: pid, found: 0 };
+    unsafe {
+        EnumChildWindows(hwnd, Some(child), &mut f as *mut Find as LPARAM);
+    }
+    if f.found != 0 {
+        process_name(f.found)
+    } else {
+        Some(name)
+    }
+}
+
+fn process_name(pid: u32) -> Option<String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    if pid == 0 {
+        return None;
+    }
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return None;
+        }
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) != 0;
+        CloseHandle(h);
+        if !ok {
+            return None;
+        }
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned())
+    }
+}
+
+/// The program at the middle of `rect` (the topmost of `windows`, in z-order), and whether
+/// `rect` is exactly one of those windows (a window pick rather than a dragged region).
+pub fn app_at(rect: IRect, windows: &[WinInfo]) -> (Option<String>, bool) {
+    let (cx, cy) = (rect.x + rect.w / 2, rect.y + rect.h / 2);
+    let exact = windows.iter().any(|w| w.rect == rect);
+    let under = windows
+        .iter()
+        .find(|w| cx >= w.rect.x && cy >= w.rect.y && cx < w.rect.x + w.rect.w && cy < w.rect.y + w.rect.h);
+    (under.and_then(|w| app_of(w.hwnd)), exact)
+}

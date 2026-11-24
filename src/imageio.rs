@@ -156,15 +156,17 @@ pub fn remove_stale_raw_files() {
 
 /// Asks where to save a screenshot: starts in the screenshots folder with the next file
 /// name, the configured format first. Without an extension the configured one is added.
-pub fn ask_save_path(c: &crate::config::Config) -> Option<PathBuf> {
-    let default_name = c
-        .next_output_path()
+/// Asks where to save, suggesting the name (and folder) Save would use for this capture.
+pub fn ask_save_path(c: &crate::config::Config, meta: &crate::naming::Meta) -> Option<PathBuf> {
+    let suggested = c.next_output_path_for(meta);
+    let default_name = suggested
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| format!("screenshot.{}", c.format.ext()));
-    // Always start in the screenshots folder. It must exist, otherwise Windows silently
-    // falls back to the last folder it remembers for the app.
-    let dir = c.output_dir.clone();
+    // Start where Save would save (a folder of the pattern, if it is there already), else in
+    // the screenshots folder. It must exist, otherwise Windows silently falls back to the last
+    // folder it remembers for the app.
+    let dir = suggested.parent().filter(|d| d.is_dir()).map(Path::to_path_buf).unwrap_or_else(|| c.output_dir.clone());
     std::fs::create_dir_all(&dir).ok();
     let mut formats = ImageFormat::ALL.to_vec();
     formats.sort_by_key(|f| *f != c.format);
