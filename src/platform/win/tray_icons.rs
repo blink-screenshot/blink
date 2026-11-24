@@ -35,6 +35,8 @@ pub enum Icon {
     Record,
     /// Stop recording: a square.
     Stop,
+    /// Pin a screenshot to the screen: a push pin.
+    Pin,
 }
 
 fn rrect(pb: &mut PathBuilder, l: f32, t: f32, r: f32, b: f32, rad: f32) {
@@ -80,6 +82,24 @@ fn path(icon: Icon) -> Option<tiny_skia::Path> {
         }
         Icon::Stop => {
             rrect(&mut pb, 6.0, 6.0, 18.0, 18.0, 2.5);
+        }
+        Icon::Pin => {
+            // A push pin: the cap, the body widening into its base, and the needle.
+            rrect(&mut pb, 7.5, 2.5, 16.5, 5.5, 1.5);
+            line(
+                &mut pb,
+                &[
+                    (9.0, 5.5),
+                    (9.0, 10.5),
+                    (5.5, 14.0),
+                    (5.5, 17.0),
+                    (18.5, 17.0),
+                    (18.5, 14.0),
+                    (15.0, 10.5),
+                    (15.0, 5.5),
+                ],
+            );
+            line(&mut pb, &[(12.0, 17.0), (12.0, 22.0)]);
         }
         Icon::Window => {
             rrect(&mut pb, 2.0, 4.0, 22.0, 20.0, 2.0);

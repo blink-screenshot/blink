@@ -2,6 +2,13 @@
 
 All notable changes to Blink, per version. Every version is on [GitHub](https://github.com/blink-screenshot/blink/releases) with its installer; the release notes are taken from this file.
 
+## [1.5.0] - 2026-11-24
+
+### New features
+
+- **Pin a screenshot to the screen.** Choose *Pin* on the notification after a capture, in the *Ask me what to do* menu, with the Pin button in the editor (`Ctrl` + `P`), or turn on *Pin to the screen* in Settings > General > After capture. The screenshot opens in a small window without a frame that stays above your other windows, right where you took it, so you can keep a value, a design or instructions in view while you work. Its bar has *On top* (Blink remembers your choice for the next pin), *Copy*, *Save as*, *Edit* and the opacity, to see through it to what is below. Drag it anywhere to move it, resize it with `Ctrl` + scroll or the corner, double-click for 100%, `Esc` closes it.
+- **Copy tables as tables.** When the text you copy from the screen or select in the editor is a table, Blink keeps its rows and columns: paste it into Excel and every value lands in its own cell; Word, Outlook and Teams make a real table of it. The label in the capture overlay and the notification say when a table was found. In the editor, *As text* next to *Copy table* copies it as plain text instead.
+
 ## [1.4.0] - 2026-11-23
 
 ### New features

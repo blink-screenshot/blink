@@ -83,6 +83,8 @@ The repository is public, so the check needs no token or account. GitHub allows 
 | `src/platform/win/scroll.rs` | scrolling capture |
 | `src/stitch.rs` | stitching scroll frames (tested) |
 | `src/ocr.rs`, `src/platform/win/ocr.rs` | reading text: the Windows OCR engine, enlarging small text, reading tall images in bands, selecting words / lines / paragraphs (tested) |
+| `src/table.rs` | recognizing a table in read text by the layout of its words, copied as HTML and tab-separated text (tested) |
+| `src/pin_ui.rs` | a pinned screenshot (`Blink --pin-raw <file> [x y]`): a frameless window that stays on top, with Copy, Save as, Edit, opacity and zoom |
 | `src/sensitive.rs` | finding private info in the read text for *Find private info* (tested) |
 | `src/qr.rs` | finding and reading QR codes on the frozen screen for the overlay (`rqrr`, tested) |
 | `src/history.rs` | the tray menu's History: the latest screenshots in `%LOCALAPPDATA%\Blink\history` (tested) |

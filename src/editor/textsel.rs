@@ -147,11 +147,34 @@ impl EditorApp {
         }
     }
 
-    pub fn copy_selected_text(&mut self) {
+    /// Copies picked text, as a table when it forms one.
+    fn put_extract(&mut self, e: ocr::Extract) {
+        let Some(table) = &e.table else { return self.put_text(e.text) };
+        let (cols, rows) = (table.columns(), table.rows.len());
+        match imageio::copy_extract_to_clipboard(&e) {
+            Ok(()) => self.toast(
+                tf("Copied a table of {0} columns and {1} rows. Paste it in Excel, Word or Teams.", &[&cols, &rows]),
+                false,
+            ),
+            Err(e) => self.toast(tf("Copy failed: {0}", &[&e]), true),
+        }
+    }
+
+    /// Whether the selected words form a table (Copy then copies a table).
+    pub fn selection_is_table(&self) -> bool {
+        self.page().is_some_and(|p| p.extract(&self.text_sel).table.is_some())
+    }
+
+    /// Copies the selected text: as a table when it forms one, unless `plain`.
+    pub fn copy_selected_text(&mut self, plain: bool) {
         let Some(page) = self.page() else { return };
-        let text = page.text_of(&self.text_sel);
-        if !text.is_empty() {
-            self.put_text(text);
+        let picked = if plain {
+            ocr::Extract { text: page.text_of(&self.text_sel), table: None }
+        } else {
+            page.extract(&self.text_sel)
+        };
+        if !picked.is_empty() {
+            self.put_extract(picked);
         }
     }
 
@@ -160,11 +183,11 @@ impl EditorApp {
             return;
         }
         let words = self.visible_words();
-        let text = self.page().map(|p| p.text_of(&words)).unwrap_or_default();
-        if text.is_empty() {
+        let picked = self.page().map(|p| p.extract(&words)).unwrap_or_default();
+        if picked.is_empty() {
             self.toast(t("No text found in this image."), false);
         } else {
-            self.put_text(text);
+            self.put_extract(picked);
         }
     }
 
@@ -343,17 +366,19 @@ pub fn privacy_bar(app: &mut EditorApp, ctx: &egui::Context) {
 /// Copy and Hide next to a text selection (`sel`: its screen rectangle): to the right of it
 /// where there is room, which is usually empty space next to text; otherwise under it.
 pub fn selection_actions(app: &mut EditorApp, ctx: &egui::Context, sel: Rect, canvas: Rect) {
-    const W: f32 = 190.0;
-    let pos = if sel.right() + 10.0 + W < canvas.right() {
+    let table = app.selection_is_table();
+    let w: f32 = if table { 300.0 } else { 190.0 };
+    let pos = if sel.right() + 10.0 + w < canvas.right() {
         pos2(sel.right() + 10.0, sel.top() - 4.0)
     } else {
         pos2(sel.left(), sel.bottom() + 8.0)
     };
     let pos = pos2(
-        pos.x.clamp(canvas.left() + 8.0, canvas.right() - W),
+        pos.x.clamp(canvas.left() + 8.0, (canvas.right() - w).max(canvas.left() + 8.0)),
         pos.y.clamp(canvas.top() + 8.0, canvas.bottom() - 44.0),
     );
     let mut copy = false;
+    let mut plain = false;
     let mut hide = false;
     egui::Area::new(egui::Id::new("text_actions")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::NONE
@@ -364,9 +389,21 @@ pub fn selection_actions(app: &mut EditorApp, ctx: &egui::Context, sel: Rect, ca
             .shadow(egui::Shadow { offset: [0, 3], blur: 12, spread: 0, color: Color32::from_black_alpha(60) })
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let b = egui::Button::new(RichText::new(t("Copy text")).color(super::ui::ON_ACCENT).strong())
+                    let label = if table { t("Copy table") } else { t("Copy text") };
+                    let b = egui::Button::new(RichText::new(label).color(super::ui::ON_ACCENT).strong())
                         .fill(theme::ACCENT);
-                    copy = ui.add(b).on_hover_text("Ctrl+C").clicked();
+                    let tip = if table {
+                        t("Ctrl+C. Pasted in Excel, Word, Outlook or Teams it becomes a table.")
+                    } else {
+                        "Ctrl+C"
+                    };
+                    copy = ui.add(b).on_hover_text(tip).clicked();
+                    if table {
+                        plain = ui
+                            .button(t("As text"))
+                            .on_hover_text(t("Copy the selected text as plain text, not as a table"))
+                            .clicked();
+                    }
                     hide = ui
                         .button(t("Hide"))
                         .on_hover_text(t("Cover the selected text with the redaction tool's mode"))
@@ -374,8 +411,8 @@ pub fn selection_actions(app: &mut EditorApp, ctx: &egui::Context, sel: Rect, ca
                 });
             });
     });
-    if copy {
-        app.copy_selected_text();
+    if copy || plain {
+        app.copy_selected_text(plain);
     } else if hide {
         app.redact_selected_text();
     }

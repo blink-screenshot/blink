@@ -320,6 +320,8 @@ pub struct Config {
     pub after_capture_open_editor: bool,
     pub after_capture_copy: bool,
     pub after_capture_save: bool,
+    /// Pin the screenshot to the screen (a small window that stays on top).
+    pub after_capture_pin: bool,
     pub output_dir: PathBuf,
     /// chrono strftime pattern, without extension.
     pub filename_pattern: String,
@@ -371,6 +373,7 @@ impl Default for Config {
             after_capture_open_editor: true,
             after_capture_copy: false,
             after_capture_save: false,
+            after_capture_pin: false,
             output_dir: pictures.join("Blink"),
             filename_pattern: "Blink_%Y-%m-%d_%H-%M-%S".into(),
             format: ImageFormat::Png,

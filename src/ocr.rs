@@ -93,7 +93,7 @@ fn is_cjk(c: char) -> bool {
         | 0x3000..=0x303F) // CJK punctuation
 }
 
-fn join_words<'a>(words: impl Iterator<Item = &'a str>) -> String {
+pub(crate) fn join_words<'a>(words: impl Iterator<Item = &'a str>) -> String {
     let mut out = String::new();
     let mut prev: Option<char> = None;
     for w in words {
@@ -270,10 +270,19 @@ impl Page {
         self.text_where(|i| set.contains(&i))
     }
 
-    /// The text of whole lines (`lines` are line indices).
-    pub fn lines_text(&self, lines: &[usize]) -> String {
-        let words: Vec<usize> = lines.iter().flat_map(|&li| self.line_words(li)).collect();
-        self.text_of(&words)
+    /// The words of whole lines (`lines` are line indices).
+    pub fn lines_words(&self, lines: &[usize]) -> Vec<usize> {
+        lines.iter().flat_map(|&li| self.line_words(li)).collect()
+    }
+
+    /// The selected words to copy: as a table when they form one, else as plain text.
+    pub fn extract(&self, words: &[usize]) -> Extract {
+        let set: std::collections::HashSet<usize> = words.iter().copied().collect();
+        let picked: Vec<&Word> = self.words().filter(|(i, _, _)| set.contains(i)).map(|(_, _, w)| w).collect();
+        match crate::table::detect(&picked) {
+            Some(table) => Extract { text: table.tsv(), table: Some(table) },
+            None => Extract { text: self.text_of(words), table: None },
+        }
     }
 
     #[cfg(test)]
@@ -313,6 +322,26 @@ impl Page {
     /// Appends the lines of `other` (read after this page: a band below it, the next screen).
     pub fn append(&mut self, other: Page) {
         self.lines.extend(other.lines.into_iter().filter(|l| !l.words.is_empty()));
+    }
+}
+
+/// Text picked to copy. When the words form a table, `text` is that table with tabs between
+/// the cells, and the clipboard also gets it as an HTML table.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Extract {
+    pub text: String,
+    pub table: Option<crate::table::Table>,
+}
+
+impl Extract {
+    pub fn is_empty(&self) -> bool {
+        self.text.trim().is_empty()
+    }
+
+    /// "Table, 3 columns × 5 rows", for labels and notifications.
+    pub fn table_label(&self) -> Option<String> {
+        let t = self.table.as_ref()?;
+        Some(crate::i18n::tf("Table, {0} columns \u{d7} {1} rows", &[&t.columns(), &t.rows.len()]))
     }
 }
 
