@@ -597,7 +597,6 @@ pub const DE: &[(&str, &str)] = &[
     ("Half on sharp screens", "Halb auf scharfen Bildschirmen"),
     ("Saves in {0}", "Speichert in {0}"),
     ("On a screen at 200% scaling or more (such as a 4K laptop), half size looks like the same screen at 100%: text stays readable, files are four times smaller, and recording and saving are much faster. Full resolution keeps every pixel, at the cost of size and speed. Other screens are always recorded at full resolution.", "Auf einem Bildschirm mit 200 % Skalierung oder mehr (etwa einem 4K-Laptop) sieht die halbe Größe aus wie derselbe Bildschirm bei 100 %: Text bleibt lesbar, Dateien sind viermal kleiner, und Aufzeichnen und Speichern gehen viel schneller. Volle Auflösung behält jedes Pixel, auf Kosten von Größe und Tempo. Andere Bildschirme werden immer in voller Auflösung aufgezeichnet."),
-    ("&Pin to the screen", "Am Bildschirm an&heften"),
     ("A small menu appears at the mouse pointer after each capture: open in editor, copy, save or pin. Esc discards the screenshot. The choices below are then not used.", "Nach jeder Aufnahme erscheint am Mauszeiger ein kleines Menü: im Editor öffnen, kopieren, speichern oder anheften. Esc verwirft den Screenshot. Die Optionen unten werden dann nicht verwendet."),
     ("As text", "Als Text"),
     ("Close (Esc)", "Schließen (Esc)"),
@@ -620,4 +619,8 @@ pub const DE: &[(&str, &str)] = &[
     ("Table, {0} columns × {1} rows", "Tabelle, {0} Spalten × {1} Zeilen"),
     ("The screenshot opens in a small window that stays above other windows, to keep it in view while you work. Its bar has Copy, Save as, Edit and opacity.", "Der Screenshot öffnet sich in einem kleinen Fenster, das über anderen Fenstern bleibt, damit du ihn beim Arbeiten im Blick hast. Die Leiste hat Kopieren, Speichern unter, Bearbeiten und Deckkraft."),
     ("Zoom (Ctrl + scroll). Click for 100%.", "Zoom (Ctrl + Mausrad). Klicken für 100 %."),
+    ("&Pin", "An&heften"),
+    ("Opacity", "Deckkraft"),
+    ("Opacity {0}%", "Deckkraft {0} %"),
+    ("Screenshot not pinned", "Screenshot nicht angeheftet"),
 ];

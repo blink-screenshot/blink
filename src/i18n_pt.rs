@@ -596,7 +596,6 @@ pub const PT: &[(&str, &str)] = &[
     ("Half on sharp screens", "Metade em telas nítidas"),
     ("Saves in {0}", "Salva em {0}"),
     ("On a screen at 200% scaling or more (such as a 4K laptop), half size looks like the same screen at 100%: text stays readable, files are four times smaller, and recording and saving are much faster. Full resolution keeps every pixel, at the cost of size and speed. Other screens are always recorded at full resolution.", "Em uma tela com 200% de escala ou mais (como um notebook 4K), metade do tamanho fica igual à mesma tela em 100%: o texto continua legível, os arquivos ficam quatro vezes menores e gravar e salvar ficam muito mais rápidos. A resolução completa mantém cada pixel, com mais tamanho e menos velocidade. As outras telas são sempre gravadas em resolução completa."),
-    ("&Pin to the screen", "&Fixar na tela"),
     ("A small menu appears at the mouse pointer after each capture: open in editor, copy, save or pin. Esc discards the screenshot. The choices below are then not used.", "Após cada captura, um pequeno menu aparece no ponteiro do mouse: abrir no editor, copiar, salvar ou fixar. Esc descarta a captura. As opções abaixo não são usadas nesse caso."),
     ("As text", "Como texto"),
     ("Close (Esc)", "Fechar (Esc)"),
@@ -619,4 +618,8 @@ pub const PT: &[(&str, &str)] = &[
     ("Table, {0} columns × {1} rows", "Tabela, {0} colunas × {1} linhas"),
     ("The screenshot opens in a small window that stays above other windows, to keep it in view while you work. Its bar has Copy, Save as, Edit and opacity.", "A captura abre em uma janela pequena que fica acima das outras, para mantê-la à vista enquanto você trabalha. A barra tem Copiar, Salvar como, Editar e opacidade."),
     ("Zoom (Ctrl + scroll). Click for 100%.", "Zoom (Ctrl + rolagem). Clique para 100%."),
+    ("&Pin", "&Fixar"),
+    ("Opacity", "Opacidade"),
+    ("Opacity {0}%", "Opacidade {0}%"),
+    ("Screenshot not pinned", "Captura não fixada"),
 ];

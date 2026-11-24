@@ -597,7 +597,6 @@ pub const FR: &[(&str, &str)] = &[
     ("Half on sharp screens", "Moitié sur les écrans haute définition"),
     ("Saves in {0}", "Enregistre dans {0}"),
     ("On a screen at 200% scaling or more (such as a 4K laptop), half size looks like the same screen at 100%: text stays readable, files are four times smaller, and recording and saving are much faster. Full resolution keeps every pixel, at the cost of size and speed. Other screens are always recorded at full resolution.", "Sur un écran à 200 % ou plus (comme un portable 4K), la moitié de la taille ressemble au même écran à 100 % : le texte reste lisible, les fichiers sont quatre fois plus petits, et l'enregistrement et la sauvegarde sont bien plus rapides. La pleine résolution garde chaque pixel, au prix de la taille et de la vitesse. Les autres écrans sont toujours enregistrés en pleine résolution."),
-    ("&Pin to the screen", "É&pingler à l'écran"),
     ("A small menu appears at the mouse pointer after each capture: open in editor, copy, save or pin. Esc discards the screenshot. The choices below are then not used.", "Après chaque capture, un petit menu apparaît au pointeur de la souris : ouvrir dans l'éditeur, copier, enregistrer ou épingler. Échap supprime la capture. Les choix ci-dessous ne sont alors pas utilisés."),
     ("As text", "En texte"),
     ("Close (Esc)", "Fermer (Échap)"),
@@ -620,4 +619,8 @@ pub const FR: &[(&str, &str)] = &[
     ("Table, {0} columns × {1} rows", "Tableau, {0} colonnes × {1} lignes"),
     ("The screenshot opens in a small window that stays above other windows, to keep it in view while you work. Its bar has Copy, Save as, Edit and opacity.", "La capture s'ouvre dans une petite fenêtre qui reste au-dessus des autres, pour la garder sous les yeux pendant que vous travaillez. Sa barre propose Copier, Enregistrer sous, Modifier et l'opacité."),
     ("Zoom (Ctrl + scroll). Click for 100%.", "Zoom (Ctrl + molette). Cliquez pour 100 %."),
+    ("&Pin", "É&pingler"),
+    ("Opacity", "Opacité"),
+    ("Opacity {0}%", "Opacité {0} %"),
+    ("Screenshot not pinned", "Capture non épinglée"),
 ];

@@ -26,6 +26,7 @@ use windows::UI::Notifications::ToastNotification;
 use windows_sys::Win32::Foundation::{GetLastError, BOOL, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{DwmFlush, DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
 use windows_sys::Win32::Graphics::Gdi::DeleteObject;
+use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::System::Registry::{
     RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
@@ -39,14 +40,15 @@ use windows_sys::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_NONE, NIIF_WARNING, NIM_ADD, NIM_DELETE,
     NIM_MODIFY, NIM_SETVERSION, NOTIFYICONDATAW,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::WM_COPYDATA;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
     DispatchMessageW, EnumWindows, FindWindowW, GetForegroundWindow, GetMenuItemCount, GetMessageW, GetSystemMetrics,
     GetWindowThreadProcessId, IsWindowVisible, LoadImageW, PeekMessageW, PostMessageW, PostQuitMessage,
     RegisterClassExW, RegisterWindowMessageW, SetForegroundWindow, SetMenuInfo, SetMenuItemInfoW, SetWindowPos,
     ShowWindow, SystemParametersInfoW, TrackPopupMenu, TranslateMessage, ASFW_ANY, EVENT_SYSTEM_FOREGROUND, IMAGE_ICON,
-    LR_DEFAULTCOLOR, MENUINFO, MENUITEMINFOW, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MIIM_BITMAP, MIM_STYLE,
-    MNS_CHECKORBMP, MSG, PM_REMOVE, SM_CXSMICON, SM_CYSMICON, SPI_GETSELECTIONFADE, SPI_SETSELECTIONFADE,
+    LR_DEFAULTCOLOR, MENUINFO, MENUITEMINFOW, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MIIM_BITMAP,
+    MIM_STYLE, MNS_CHECKORBMP, MSG, PM_REMOVE, SM_CXSMICON, SM_CYSMICON, SPI_GETSELECTIONFADE, SPI_SETSELECTIONFADE,
     SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
     WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CONTEXTMENU, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP,
     WM_NULL, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSEXW,
@@ -443,13 +445,18 @@ fn hide_balloon(hwnd: HWND) {
 /// Windows refused it.
 fn show_capture_toast(hwnd: HWND, title: &str, text: &str, saved: bool, pinned: bool) -> bool {
     let edit = Action::EditCapture as u32;
-    let mut buttons = vec![Button { label: t("Edit"), action: edit }];
+    let mut buttons = vec![Button::new(t("Edit"), edit)];
     if !saved {
-        buttons.push(Button { label: t("Save"), action: Action::SaveCapture as u32 });
+        buttons.push(Button::new(t("Save"), Action::SaveCapture as u32));
     }
-    buttons.push(Button { label: t("Save as"), action: Action::SaveCaptureAs as u32 });
+    buttons.push(Button::new(t("Save as"), Action::SaveCaptureAs as u32));
     if !pinned {
-        buttons.push(Button { label: t("Pin"), action: Action::PinCapture as u32 });
+        // A push pin: the word does not fit next to the others in every language.
+        buttons.push(Button {
+            label: "\u{1F4CC}",
+            action: Action::PinCapture as u32,
+            tip: Some(t("Pin to the screen")),
+        });
     }
     show_toast(hwnd, title, text, edit, &buttons)
 }
@@ -756,7 +763,7 @@ fn menu_label(text: &str, hk: Hotkey) -> String {
 }
 
 /// A popup menu with icons, shown at the mouse pointer.
-struct PopupMenu {
+pub(super) struct PopupMenu {
     menu: windows_sys::Win32::UI::WindowsAndMessaging::HMENU,
     bitmaps: Vec<windows_sys::Win32::Graphics::Gdi::HBITMAP>,
     icon_px: u32,
@@ -764,7 +771,7 @@ struct PopupMenu {
 }
 
 impl PopupMenu {
-    unsafe fn new() -> Self {
+    pub(super) unsafe fn new() -> Self {
         let menu = CreatePopupMenu();
         // Icons share the column with check marks instead of adding another one.
         let mut info: MENUINFO = std::mem::zeroed();
@@ -777,7 +784,7 @@ impl PopupMenu {
         Self { menu, bitmaps: Vec::new(), icon_px: (16.0 * scale).round() as u32, color }
     }
 
-    unsafe fn add(&mut self, id: usize, icon: Icon, text: &str) {
+    pub(super) unsafe fn add(&mut self, id: usize, icon: Icon, text: &str) {
         let w = wide(text);
         AppendMenuW(self.menu, MF_STRING, id, w.as_ptr());
         let bmp = tray_icons::bitmap(icon, self.icon_px, self.color);
@@ -822,17 +829,23 @@ impl PopupMenu {
         }
     }
 
-    unsafe fn title(&mut self, text: &str) {
+    /// A plain item, with a check mark when `checked`.
+    pub(super) unsafe fn add_check(&mut self, id: usize, text: &str, checked: bool) {
+        let w = wide(text);
+        AppendMenuW(self.menu, MF_STRING | if checked { MF_CHECKED } else { 0 }, id, w.as_ptr());
+    }
+
+    pub(super) unsafe fn title(&mut self, text: &str) {
         let w = wide(text);
         AppendMenuW(self.menu, MF_STRING | MF_GRAYED, 0, w.as_ptr());
     }
 
-    unsafe fn separator(&mut self) {
+    pub(super) unsafe fn separator(&mut self) {
         AppendMenuW(self.menu, MF_SEPARATOR, 0, std::ptr::null());
     }
 
     /// Shows the menu at the mouse pointer; returns the chosen id (0 = dismissed).
-    unsafe fn track(self, hwnd: HWND) -> usize {
+    pub(super) unsafe fn track(self, hwnd: HWND) -> usize {
         let pt = cursor_pos();
         SetForegroundWindow(hwnd);
         let _no_fade = NoSelectionFade::new();
@@ -1002,7 +1015,7 @@ unsafe fn ask_after_capture(hwnd: HWND, img: &RgbaImage) -> Option<AfterCapture>
     m.add(AfterCapture::Edit as usize, Icon::Edit, t("Open in &editor"));
     m.add(AfterCapture::Copy as usize, Icon::Clipboard, t("&Copy to clipboard"));
     m.add(AfterCapture::Save as usize, Icon::Save, t("&Save to screenshots folder"));
-    m.add(AfterCapture::Pin as usize, Icon::Pin, t("&Pin to the screen"));
+    m.add(AfterCapture::Pin as usize, Icon::Pin, t("&Pin"));
     match m.track(hwnd) {
         1 => Some(AfterCapture::Edit),
         2 => Some(AfterCapture::Copy),
@@ -1014,7 +1027,7 @@ unsafe fn ask_after_capture(hwnd: HWND, img: &RgbaImage) -> Option<AfterCapture>
 
 // ---- actions -----------------------------------------------------------------------------
 
-fn spawn_self(args: &[&str]) {
+pub(super) fn spawn_self(args: &[&str]) {
     if let Ok(exe) = std::env::current_exe() {
         unsafe {
             AllowSetForegroundWindow(ASFW_ANY);
@@ -1185,15 +1198,9 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, at: Option<(i32
     }
     let mut pinned = false;
     if c.after_capture_pin {
-        // Its own file: the pin deletes it once read, like the editor deletes its own.
-        let path = imageio::temp_raw_path();
-        match imageio::write_raw(&path, out) {
-            Ok(()) => {
-                pin(&path, at);
-                pinned = true;
-            }
+        match super::pin::open(out, at) {
+            Ok(()) => pinned = true,
             Err(e) => {
-                std::fs::remove_file(&path).ok();
                 lines.push(tf("Could not pin it: {0}", &[&e]));
                 warning = true;
             }
@@ -1280,7 +1287,7 @@ fn deliver_text(hwnd: HWND, text: Result<ocr::Extract, OcrError>, img: Option<Rg
         return balloon(hwnd, title, &body, false);
     };
     let edit = Action::EditCaptureText as u32;
-    if show_toast(hwnd, title, &body, edit, &[Button { label: t("Open in editor"), action: edit }]) {
+    if show_toast(hwnd, title, &body, edit, &[Button::new(t("Open in editor"), edit)]) {
         BALLOON_IMAGE.with(|c| *c.borrow_mut() = Some(path));
         return;
     }
@@ -1364,13 +1371,23 @@ fn save_capture(hwnd: HWND) {
     }
 }
 
-/// Opens a pinned screenshot of a raw file (it deletes the file once read). `at`: where the
+/// Pins the screenshot in a raw file (deleted once read) to the screen. `at`: where the
 /// screenshot was taken, so the pin covers that spot.
-fn pin(path: &std::path::Path, at: Option<(i32, i32)>) {
-    let p = path.display().to_string();
-    match at {
-        Some((x, y)) => spawn_self(&["--pin-raw", &p, &x.to_string(), &y.to_string()]),
-        None => spawn_self(&["--pin-raw", &p]),
+fn pin_file(hwnd: HWND, path: &std::path::Path, at: Option<(i32, i32)>) {
+    let img = imageio::read_capture_flat(path).map_err(|e| e.to_string());
+    std::fs::remove_file(path).ok();
+    if let Err(e) = img.and_then(|img| super::pin::open(&img, at)) {
+        balloon(hwnd, t("Screenshot not pinned"), &tf("Could not pin it: {0}", &[&e]), true);
+    }
+}
+
+/// A pin asked for by another Blink process (the editor): `"x;y;path"` or `";;path"`.
+fn pin_request(hwnd: HWND, text: &str) {
+    let mut parts = text.splitn(3, ';');
+    let (x, y, path) = (parts.next(), parts.next(), parts.next());
+    let at = x.zip(y).and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)));
+    if let Some(path) = path.filter(|p| !p.is_empty()) {
+        pin_file(hwnd, std::path::Path::new(path), at);
     }
 }
 
@@ -1444,11 +1461,11 @@ fn recording_done(hwnd: HWND) {
             let Some(file) = o.path.clone() else { return };
             let title = tf("Recording saved ({0}, {1})", &[&human_duration(o.duration_ms), &human_size(o.bytes)]);
             let body = file.display().to_string();
-            let mut buttons = vec![Button { label: t("Edit"), action: Action::EditRecording as u32 }];
+            let mut buttons = vec![Button::new(t("Edit"), Action::EditRecording as u32)];
             if o.format != Some(crate::config::VideoFormat::Gif) {
-                buttons.push(Button { label: t("As GIF"), action: Action::RecordingGif as u32 });
+                buttons.push(Button::new(t("As GIF"), Action::RecordingGif as u32));
             }
-            buttons.push(Button { label: t("Copy"), action: Action::CopyRecording as u32 });
+            buttons.push(Button::new(t("Copy"), Action::CopyRecording as u32));
             if show_toast(hwnd, &title, &body, Action::EditRecording as u32, &buttons) {
                 TOAST_RECORDING.with(|r| *r.borrow_mut() = Some((dir, file)));
             } else {
@@ -1508,7 +1525,7 @@ fn gif_done(hwnd: HWND, dir: PathBuf) {
         Some(o) if o.status == Status::Saved => {
             let Some(file) = o.path else { return };
             let title = tf("GIF saved ({0})", &[&human_size(o.bytes)]);
-            let buttons = [Button { label: t("Copy"), action: Action::CopyRecording as u32 }];
+            let buttons = [Button::new(t("Copy"), Action::CopyRecording as u32)];
             let body = file.display().to_string();
             if show_toast(hwnd, &title, &body, Action::CopyRecording as u32, &buttons) {
                 TOAST_RECORDING.with(|r| *r.borrow_mut() = Some((dir, file)));
@@ -1592,12 +1609,12 @@ fn run_action(hwnd: HWND, action: Action, from_menu: bool) {
         }
         Action::SaveCapture => save_capture(hwnd),
         Action::PinCapture => {
-            // The pin draws the pointer in and deletes the file.
+            // Right here, in this process: a pin has to appear at once.
             let at = BALLOON_ORIGIN.with(|c| c.take());
-            if let Some(path) = BALLOON_IMAGE.with(|c| c.borrow_mut().take()) {
-                pin(&path, at);
-            }
             hide_capture_toast();
+            if let Some(path) = BALLOON_IMAGE.with(|c| c.borrow_mut().take()) {
+                pin_file(hwnd, &path, at);
+            }
         }
         Action::HistoryItem => {
             if let Some(id) = HISTORY_PICK.with(|p| p.take()) {
@@ -1656,6 +1673,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
             }
             0
+        }
+        WM_COPYDATA => {
+            // A pin asked for by the editor (see `super::pin_in_resident`).
+            let cds = &*(lp as *const COPYDATASTRUCT);
+            if cds.dwData != super::PIN_COPYDATA || cds.lpData.is_null() {
+                return DefWindowProcW(hwnd, msg, wp, lp);
+            }
+            let units = std::slice::from_raw_parts(cds.lpData as *const u16, cds.cbData as usize / 2);
+            pin_request(hwnd, &String::from_utf16_lossy(units));
+            1
         }
         OPEN_SETTINGS_MSG => {
             run_action(hwnd, Action::Settings, false);

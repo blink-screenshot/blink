@@ -775,6 +775,10 @@ impl EditorApp {
         self.finish_text_edit();
         let path = imageio::temp_raw_path();
         let result = imageio::write_raw(&path, &self.export()).map_err(|e| e.to_string()).and_then(|()| {
+            // The tray shows it at once; without the tray, a pin window of its own.
+            if platform::pin_in_resident(&path, None) {
+                return Ok(());
+            }
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
             std::process::Command::new(exe).arg("--pin-raw").arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
         });

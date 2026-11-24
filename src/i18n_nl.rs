@@ -597,7 +597,6 @@ pub const NL: &[(&str, &str)] = &[
     ("Half on sharp screens", "Half op scherpe schermen"),
     ("Saves in {0}", "Slaat op in {0}"),
     ("On a screen at 200% scaling or more (such as a 4K laptop), half size looks like the same screen at 100%: text stays readable, files are four times smaller, and recording and saving are much faster. Full resolution keeps every pixel, at the cost of size and speed. Other screens are always recorded at full resolution.", "Op een scherm met 200% schaal of meer (zoals een 4K-laptop) ziet half formaat eruit als hetzelfde scherm op 100%: tekst blijft leesbaar, bestanden zijn vier keer zo klein en opnemen en opslaan gaan veel sneller. Volledige resolutie houdt elke pixel, ten koste van grootte en snelheid. Andere schermen worden altijd op volledige resolutie opgenomen."),
-    ("&Pin to the screen", "&Vastzetten op het scherm"),
     ("A small menu appears at the mouse pointer after each capture: open in editor, copy, save or pin. Esc discards the screenshot. The choices below are then not used.", "Na elke opname verschijnt bij de muisaanwijzer een klein menu: openen in de editor, kopiëren, opslaan of vastzetten. Esc gooit de screenshot weg. De keuzes hieronder worden dan niet gebruikt."),
     ("As text", "Als tekst"),
     ("Close (Esc)", "Sluiten (Esc)"),
@@ -620,4 +619,8 @@ pub const NL: &[(&str, &str)] = &[
     ("Table, {0} columns × {1} rows", "Tabel, {0} kolommen × {1} rijen"),
     ("The screenshot opens in a small window that stays above other windows, to keep it in view while you work. Its bar has Copy, Save as, Edit and opacity.", "De screenshot opent in een klein venster dat boven andere vensters blijft, zodat je hem in beeld houdt terwijl je werkt. De balk heeft Kopiëren, Opslaan als, Bewerken en doorzichtigheid."),
     ("Zoom (Ctrl + scroll). Click for 100%.", "Zoomen (Ctrl + scrollen). Klik voor 100%."),
+    ("&Pin", "&Vastzetten"),
+    ("Opacity", "Doorzichtigheid"),
+    ("Opacity {0}%", "Doorzichtigheid {0}%"),
+    ("Screenshot not pinned", "Screenshot niet vastgezet"),
 ];

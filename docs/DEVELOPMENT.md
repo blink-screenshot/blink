@@ -84,7 +84,8 @@ The repository is public, so the check needs no token or account. GitHub allows 
 | `src/stitch.rs` | stitching scroll frames (tested) |
 | `src/ocr.rs`, `src/platform/win/ocr.rs` | reading text: the Windows OCR engine, enlarging small text, reading tall images in bands, selecting words / lines / paragraphs (tested) |
 | `src/table.rs` | recognizing a table in read text by the layout of its words, copied as HTML and tab-separated text (tested) |
-| `src/pin_ui.rs` | a pinned screenshot (`Blink --pin-raw <file> [x y]`): a frameless window that stays on top, with Copy, Save as, Edit, opacity and zoom |
+| `src/pin_bar.rs`, `src/platform/win/pin.rs` | pinned screenshots: the bar (portable, tested, previewable with `BLINK_PIN_PREVIEW=<dir> cargo test pin_bar -- --nocapture`) and the frameless Win32 window the tray shows them in, so a pin appears at once; the editor asks the tray for one with `WM_COPYDATA` |
+| `src/pin_ui.rs` | the same pin as an egui window (`Blink --pin-raw <file> [x y]`), for when the tray is not running and for development on Linux; also the remembered *On top* choice (`pin.json`) |
 | `src/sensitive.rs` | finding private info in the read text for *Find private info* (tested) |
 | `src/qr.rs` | finding and reading QR codes on the frozen screen for the overlay (`rqrr`, tested) |
 | `src/history.rs` | the tray menu's History: the latest screenshots in `%LOCALAPPDATA%\Blink\history` (tested) |

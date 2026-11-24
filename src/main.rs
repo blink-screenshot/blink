@@ -21,6 +21,7 @@ mod i18n_nl;
 mod i18n_pt;
 mod imageio;
 mod ocr;
+mod pin_bar;
 mod pin_ui;
 mod platform;
 mod qr;
@@ -61,9 +62,13 @@ fn main() {
         Some("--pin-raw") => match arg(1) {
             Some(p) => {
                 let path = PathBuf::from(p);
+                let at = arg(2).zip(arg(3)).and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)));
+                // The tray shows pins itself, at once; this window is for when it is not running.
+                if platform::pin_in_resident(&path, at) {
+                    return;
+                }
                 let img = imageio::read_capture_flat(&path).map_err(|e| e.to_string());
                 std::fs::remove_file(&path).ok();
-                let at = arg(2).zip(arg(3)).and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)));
                 img.and_then(|img| pin_ui::run(img, at))
             }
             None => Err(i18n::t("Missing file path.").into()),

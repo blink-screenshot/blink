@@ -6,6 +6,7 @@ mod http;
 mod kbhook;
 mod ocr;
 mod overlay;
+mod pin;
 mod rec;
 mod resident;
 mod scroll;
@@ -291,6 +292,36 @@ pub fn place_pin_window(hwnd: isize, at: Option<(i32, i32)>, bar_px: i32) {
             }
         }
         SetForegroundWindow(hwnd);
+    }
+}
+
+/// `WM_COPYDATA` id of a pin request ("BlPn").
+pub(crate) const PIN_COPYDATA: usize = 0x426C_506E;
+
+/// Asks the tray to pin the screenshot in a raw file (it deletes the file): it shows pins
+/// itself, at once. False when the tray is not running; the file is then left alone.
+pub fn pin_in_resident(path: &Path, at: Option<(i32, i32)>) -> bool {
+    use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, SendMessageW, ASFW_ANY, WM_COPYDATA};
+    let class = wide(RESIDENT_CLASS);
+    let text = match at {
+        Some((x, y)) => format!("{x};{y};{}", path.display()),
+        None => format!(";;{}", path.display()),
+    };
+    let units: Vec<u16> = text.encode_utf16().collect();
+    unsafe {
+        let tray = FindWindowW(class.as_ptr(), std::ptr::null());
+        if tray.is_null() {
+            return false;
+        }
+        // The tray may bring the pin to the front.
+        AllowSetForegroundWindow(ASFW_ANY);
+        let cds = COPYDATASTRUCT {
+            dwData: PIN_COPYDATA,
+            cbData: (units.len() * 2) as u32,
+            lpData: units.as_ptr() as *mut std::ffi::c_void,
+        };
+        SendMessageW(tray, WM_COPYDATA, 0, &cds as *const COPYDATASTRUCT as isize) != 0
     }
 }
 

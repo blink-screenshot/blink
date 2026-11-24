@@ -228,9 +228,9 @@ impl PinApp {
         if drag.drag_started() {
             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(6.0, 4.0))), |ui| {
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 4.0))), |ui| {
             ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.spacing_mut().item_spacing.x = 8.0;
                 let mut on = self.prefs.on_top;
                 if ui
                     .checkbox(&mut on, t("On top"))
