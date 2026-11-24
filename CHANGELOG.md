@@ -2,6 +2,13 @@
 
 All notable changes to Blink, per version. Every version is on [GitHub](https://github.com/blink-screenshot/blink/releases) with its installer; the release notes are taken from this file.
 
+## [1.6.1] - 2026-11-24
+
+### Bug fixes
+
+- **Resizing a pin is smooth.** Dragging an edge of a pin or zooming it with `Ctrl` + scroll stuttered, most of all with a large screenshot. The pin now follows the mouse at once and sharpens the screenshot as soon as you let go.
+- **No more black screenshots with *Tone map HDR screens* on.** On some PCs the screen came out completely black with this setting. Blink now checks the HDR picture against the normal screenshot and keeps the normal one when the HDR picture is empty, and writes what happened to `%LOCALAPPDATA%\Blink\hdr.log`. If your HDR screenshots still look wrong, please send us that file.
+
 ## [1.6.0] - 2026-11-24
 
 ### New features

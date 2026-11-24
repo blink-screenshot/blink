@@ -12,7 +12,12 @@
 //! - On top, Copy, Save as, Edit and the opacity are in the bar and in the right-click menu;
 //!   `Esc` closes, `Ctrl` + `C` / `S` / `E` / `T` / `0` do the same as the bar.
 //! - The screenshot is held once, as BGRA rows the screen can draw directly, and freed when
-//!   the pin closes. Save as and Edit hand a copy to a process of their own, so a file dialog
+//!   the pin closes. Shown at another size, it is shrunk smoothly once and kept that way, so a
+//!   repaint (hover, focus) is a plain copy. While you resize or zoom, it is drawn fast from
+//!   a copy at most twice the size on screen (`pyramid`), and smoothly again when you stop:
+//!   shrinking a 4K screenshot smoothly on every mouse move is what made resizing stutter.
+//! - The window is only layered (`WS_EX_LAYERED`) below 100% opacity: Windows resizes a
+//!   layered window more slowly. Save as and Edit hand a copy to a process of their own, so a file dialog
 //!   never holds up the tray.
 
 use super::resident::{spawn_self, PopupMenu};
@@ -32,8 +37,8 @@ use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORN
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint,
     FillRect, FrameRect, InvalidateRect, ScreenToClient, SelectObject, SetBrushOrgEx, SetDIBitsToDevice,
-    SetStretchBltMode, StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HALFTONE, PAINTSTRUCT,
-    SRCCOPY,
+    SetStretchBltMode, StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, COLORONCOLOR, DIB_RGB_COLORS, HALFTONE,
+    HBITMAP, HDC, PAINTSTRUCT, SRCCOPY,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -41,15 +46,15 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetSystemMetrics, GetWindowLongPtrW, KillTimer,
-    LoadCursorW, LoadImageW, RegisterClassExW, SetForegroundWindow, SetLayeredWindowAttributes, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, CREATESTRUCTW, CS_DBLCLKS, GWLP_USERDATA, HTBOTTOM, HTBOTTOMLEFT,
-    HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HWND_NOTOPMOST, HWND_TOPMOST,
-    IDC_ARROW, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MINMAXINFO, SM_CXICON, SM_CXSMICON, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SW_SHOW, WA_INACTIVE, WMSZ_BOTTOM, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WM_ACTIVATE,
-    WM_CLOSE, WM_CONTEXTMENU, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    LoadCursorW, LoadImageW, RegisterClassExW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, CREATESTRUCTW, CS_DBLCLKS, GWLP_USERDATA, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT,
+    HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IMAGE_ICON,
+    LR_DEFAULTCOLOR, MINMAXINFO, SM_CXICON, SM_CXSMICON, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_SHOW,
+    WA_INACTIVE, WMSZ_BOTTOM, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WM_ACTIVATE, WM_CLOSE, WM_CONTEXTMENU,
+    WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY, WM_NCHITTEST,
-    WM_NCLBUTTONDBLCLK, WM_PAINT, WM_SIZE, WM_SIZING, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOPMOST,
-    WS_MINIMIZEBOX, WS_POPUP, WS_THICKFRAME,
+    WM_NCLBUTTONDBLCLK, WM_PAINT, WM_SIZE, WM_SIZING, WM_TIMER, WNDCLASSEXW, WS_EX_TOPMOST, WS_MINIMIZEBOX, WS_POPUP,
+    WS_THICKFRAME,
 };
 
 const CLASS: &str = "BlinkPinWindow";
@@ -58,6 +63,13 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 const MK_CONTROL: u32 = 0x0008;
 /// Timer that takes "Copied" off the Copy button again.
 const COPIED_TIMER: usize = 1;
+/// Timer after a zoom step with `Ctrl` + scroll: when it fires, the zooming has stopped and
+/// the screenshot is drawn smoothly again.
+const SETTLE_TIMER: usize = 2;
+/// How long after the last zoom step that is.
+const SETTLE_MS: u32 = 150;
+/// The pyramid stops at a copy this small (either side, pixels).
+const PYRAMID_MIN: u32 = 32;
 
 /// Right-click menu ids.
 const MENU_COPY: usize = 1;
@@ -85,6 +97,24 @@ struct Pin {
     copied: bool,
     /// Pixels per point of the monitor the pin is on.
     scale: f32,
+    /// The screenshot at half, a quarter, ... of its size (BGRA, width, height), to draw from
+    /// while it is resized. Made the first time it is needed.
+    pyramid: Vec<(Vec<u8>, u32, u32)>,
+    /// The screenshot shrunk smoothly to the size it has on screen (width, height, bitmap),
+    /// so a repaint at that size is a plain copy.
+    scaled: Option<(i32, i32, HBITMAP)>,
+    /// Being resized or zoomed: draw fast, smoothly again when it stops.
+    fast: bool,
+}
+
+impl Drop for Pin {
+    fn drop(&mut self) {
+        if let Some((_, _, bmp)) = self.scaled.take() {
+            unsafe {
+                DeleteObject(bmp);
+            }
+        }
+    }
 }
 
 impl Pin {
@@ -116,6 +146,27 @@ impl Pin {
 
     fn layout(&self, cw: i32, ch: i32) -> pin_bar::Layout {
         pin_bar::layout(cw as f32, self.scale, &self.state(cw, ch), capture_bar::fonts())
+    }
+
+    /// Picture `i` of the pyramid: 0 is the screenshot itself.
+    fn level(&self, i: usize) -> (&[u8], u32, u32) {
+        match i.checked_sub(1).and_then(|j| self.pyramid.get(j)) {
+            Some((px, w, h)) => (px, *w, *h),
+            None => (&self.bgra, self.w, self.h),
+        }
+    }
+
+    fn build_pyramid(&mut self) {
+        if !self.pyramid.is_empty() {
+            return;
+        }
+        let (mut w, mut h) = (self.w, self.h);
+        while w / 2 >= PYRAMID_MIN && h / 2 >= PYRAMID_MIN {
+            let src = self.pyramid.last().map_or(&self.bgra, |(px, _, _)| px);
+            let next = pin_bar::half_bgra(src, w, h);
+            (w, h) = (next.1, next.2);
+            self.pyramid.push(next);
+        }
     }
 
     fn rgba(&self) -> Option<RgbaImage> {
@@ -213,6 +264,9 @@ pub fn open(img: &RgbaImage, at: Option<(i32, i32)>, meta: &crate::naming::Meta)
         tracking: false,
         copied: false,
         scale,
+        pyramid: Vec::new(),
+        scaled: None,
+        fast: false,
     });
     // At 100%, unless that does not fit 90% of the work area.
     let bar = pin.bar();
@@ -228,7 +282,8 @@ pub fn open(img: &RgbaImage, at: Option<(i32, i32)>, meta: &crate::naming::Meta)
     let x = x.min(work.right - win_w).max(work.left);
     let y = y.min(work.bottom - win_h).max(work.top);
     let title = wide(&tf("Pinned screenshot {0} \u{d7} {1}", &[&w, &h]));
-    let ex = WS_EX_LAYERED | if pin.on_top { WS_EX_TOPMOST } else { 0 };
+    // Not layered (see the top of this file) until the opacity goes below 100%.
+    let ex = if pin.on_top { WS_EX_TOPMOST } else { 0 };
     unsafe {
         let class = wide(CLASS);
         let hwnd = CreateWindowExW(
@@ -248,7 +303,6 @@ pub fn open(img: &RgbaImage, at: Option<(i32, i32)>, meta: &crate::naming::Meta)
         if hwnd.is_null() {
             return Err("CreateWindowExW".into());
         }
-        SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
         // Square corners on Windows 11: the corners of the screenshot are not cut off.
         let square: u32 = 1; // DWMWCP_DONOTROUND
         DwmSetWindowAttribute(
@@ -297,6 +351,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_SIZE => {
             InvalidateRect(hwnd, std::ptr::null(), 0);
+            0
+        }
+        // Dragging an edge (or moving: the size stays, so the smooth copy is used as is).
+        WM_ENTERSIZEMOVE => {
+            pin.fast = true;
+            0
+        }
+        WM_EXITSIZEMOVE => {
+            settle(hwnd, pin);
             0
         }
         WM_ERASEBKGND => 1,
@@ -368,6 +431,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let delta = ((wp >> 16) & 0xFFFF) as i16;
                 let (cw, ch) = client_size(hwnd);
                 let step = if delta > 0 { 1.1 } else { 1.0 / 1.1 };
+                // Fast while the wheel turns, smooth once it stops.
+                pin.fast = true;
+                SetTimer(hwnd, SETTLE_TIMER, SETTLE_MS, None);
                 zoom_to(hwnd, pin, pin.zoom(cw, ch) * step);
             }
             0
@@ -385,6 +451,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 (true, 0x30) => zoom_to(hwnd, pin, 1.0), // 0
                 _ => {}
             }
+            0
+        }
+        WM_TIMER if wp == SETTLE_TIMER => {
+            settle(hwnd, pin);
             0
         }
         WM_TIMER if wp == COPIED_TIMER => {
@@ -466,6 +536,21 @@ fn keep_shape(pin: &Pin, edge: u32, r: &mut RECT) {
     }
 }
 
+/// Resizing or zooming has stopped: draws the screenshot smoothly again.
+fn settle(hwnd: HWND, pin: &mut Pin) {
+    unsafe {
+        KillTimer(hwnd, SETTLE_TIMER);
+    }
+    if pin.fast {
+        pin.fast = false;
+        let (cw, ch) = client_size(hwnd);
+        let r = RECT { left: 0, top: pin.bar(), right: cw, bottom: ch };
+        unsafe {
+            InvalidateRect(hwnd, &r, 0);
+        }
+    }
+}
+
 /// Resizes the window to show the screenshot at `zoom` (1 = one pixel per screen pixel).
 fn zoom_to(hwnd: HWND, pin: &Pin, zoom: f32) {
     let z = zoom.clamp(0.05, 8.0);
@@ -492,7 +577,7 @@ fn invalidate_bar(hwnd: HWND, pin: &Pin) {
     }
 }
 
-unsafe fn paint(hwnd: HWND, pin: &Pin) {
+unsafe fn paint(hwnd: HWND, pin: &mut Pin) {
     let mut ps: PAINTSTRUCT = std::mem::zeroed();
     let hdc = BeginPaint(hwnd, &mut ps);
     let (cw, ch) = client_size(hwnd);
@@ -533,28 +618,7 @@ unsafe fn paint(hwnd: HWND, pin: &Pin) {
     // The screenshot, unless only the bar changed.
     if ps.rcPaint.bottom > bar {
         let (x, y, w, h) = pin.image_rect(cw, ch);
-        let bmi = bitmap_info(pin.w as i32, pin.h as i32);
-        if (w, h) == (pin.w as i32, pin.h as i32) {
-            SetDIBitsToDevice(mem, x, y, pin.w, pin.h, 0, 0, 0, pin.h, pin.bgra.as_ptr().cast(), &bmi, DIB_RGB_COLORS);
-        } else {
-            SetStretchBltMode(mem, HALFTONE);
-            SetBrushOrgEx(mem, 0, 0, std::ptr::null_mut());
-            StretchDIBits(
-                mem,
-                x,
-                y,
-                w,
-                h,
-                0,
-                0,
-                pin.w as i32,
-                pin.h as i32,
-                pin.bgra.as_ptr().cast(),
-                &bmi,
-                DIB_RGB_COLORS,
-                SRCCOPY,
-            );
-        }
+        draw_image(hdc, mem, pin, x, y, w, h);
     }
     // A thin edge, so the pin never looks like part of the screen below it: the accent while
     // it has the focus.
@@ -567,6 +631,68 @@ unsafe fn paint(hwnd: HWND, pin: &Pin) {
     DeleteObject(bmp);
     DeleteDC(mem);
     EndPaint(hwnd, &ps);
+}
+
+/// Draws the screenshot at `w` x `h` at `x`, `y` of `dst`; `screen` is the window's DC.
+unsafe fn draw_image(screen: HDC, dst: HDC, pin: &mut Pin, x: i32, y: i32, w: i32, h: i32) {
+    // 100%: pixel for pixel.
+    if (w, h) == (pin.w as i32, pin.h as i32) {
+        let bmi = bitmap_info(w, h);
+        SetDIBitsToDevice(dst, x, y, pin.w, pin.h, 0, 0, 0, pin.h, pin.bgra.as_ptr().cast(), &bmi, DIB_RGB_COLORS);
+        return;
+    }
+    if !matches!(pin.scaled, Some((sw, sh, _)) if (sw, sh) == (w, h)) {
+        pin.build_pyramid();
+        let level = pin_bar::pyramid_level(pin.w, pin.h, w, h, pin.pyramid.len() + 1);
+        let fast = pin.fast;
+        let (px, lw, lh) = pin.level(level);
+        let bmi = bitmap_info(lw as i32, lh as i32);
+        let stretch = |to: HDC, x: i32, y: i32, mode| {
+            SetStretchBltMode(to, mode);
+            SetBrushOrgEx(to, 0, 0, std::ptr::null_mut());
+            StretchDIBits(
+                to,
+                x,
+                y,
+                w,
+                h,
+                0,
+                0,
+                lw as i32,
+                lh as i32,
+                px.as_ptr().cast(),
+                &bmi,
+                DIB_RGB_COLORS,
+                SRCCOPY,
+            );
+        };
+        if fast {
+            // From a copy at most twice the size: quick enough for every mouse move.
+            stretch(dst, x, y, COLORONCOLOR);
+            return;
+        }
+        // Smoothly, once for this size.
+        let bmp = CreateCompatibleBitmap(screen, w, h);
+        if bmp.is_null() {
+            stretch(dst, x, y, HALFTONE);
+            return;
+        }
+        let dc = CreateCompatibleDC(screen);
+        let old = SelectObject(dc, bmp);
+        stretch(dc, 0, 0, HALFTONE);
+        SelectObject(dc, old);
+        DeleteDC(dc);
+        if let Some((_, _, prev)) = pin.scaled.replace((w, h, bmp)) {
+            DeleteObject(prev);
+        }
+    }
+    if let Some((_, _, bmp)) = pin.scaled {
+        let dc = CreateCompatibleDC(screen);
+        let old = SelectObject(dc, bmp);
+        BitBlt(dst, x, y, w, h, dc, 0, 0, SRCCOPY);
+        SelectObject(dc, old);
+        DeleteDC(dc);
+    }
 }
 
 /// Writes the screenshot to a temporary file for another Blink process (it deletes it).
@@ -636,9 +762,8 @@ fn run(hwnd: HWND, item: Item) {
 fn set_opacity(hwnd: HWND, pct: u8) {
     let Some(pin) = (unsafe { pin_of(hwnd) }) else { return };
     pin.opacity = pct;
-    unsafe {
-        SetLayeredWindowAttributes(hwnd, 0, (pct as u32 * 255 / 100) as u8, LWA_ALPHA);
-    }
+    // Layered only below 100%.
+    super::set_window_opacity(hwnd as isize, (pct as u32 * 255 / 100) as u8);
     invalidate_bar(hwnd, pin);
 }
 
