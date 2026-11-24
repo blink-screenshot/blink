@@ -756,21 +756,66 @@ impl SettingsApp {
                 }
                 if ui.button(t("Open")).clicked() {
                     std::fs::create_dir_all(&c.output_dir).ok();
-                    platform::open_folder(&c.output_dir);
+                    platform::open_folder_newest(&c.output_dir);
                 }
             });
             ui.end_row();
-            ui.label(t("File name"));
+            ui.label(t("File name and folders"));
             ui.vertical(|ui| {
+                ui.set_max_width(420.0);
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut c.filename_pattern).desired_width(260.0));
-                    info(ui, "pattern", t("The name of each saved screenshot. %Y is the year, %m the month, %d the day, %H %M %S the time. Everything else is used as it is. If the file exists, Blink adds (2), (3), ..."));
+                    let presets = crate::naming::presets();
+                    let current = presets
+                        .iter()
+                        .find(|(_, p)| *p == c.filename_pattern)
+                        .map_or(t("Your own"), |(name, _)| *name);
+                    egui::ComboBox::from_id_salt("pattern_preset").selected_text(current).width(220.0).show_ui(ui, |ui| {
+                        for (name, pattern) in presets {
+                            if ui.selectable_label(c.filename_pattern == pattern, name).clicked() {
+                                c.filename_pattern = pattern.to_string();
+                            }
+                        }
+                    });
                 });
-                let preview = c.next_output_path();
-                note(
-                    ui,
-                    &tf("e.g. {0}", &[&preview.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()]),
-                );
+                let edit_id = egui::Id::new("filename_pattern");
+                let out = egui::TextEdit::singleline(&mut c.filename_pattern).id(edit_id).desired_width(400.0).show(ui);
+                // Where a variable button inserts: the cursor, or the end.
+                let cursor_id = edit_id.with("cursor");
+                if let Some(r) = out.cursor_range {
+                    ui.ctx().data_mut(|d| d.insert_temp(cursor_id, r.primary.ccursor.index));
+                }
+                note(ui, t("Type \\ to make a folder: everything before it becomes a folder in the output folder, made when the first screenshot goes in. {year}-{month}\\{app}_{time} saves each month in a folder of its own, with the program you captured in the name. Recordings are named the same way."));
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                    ui.label(RichText::new(t("Insert:")).small().color(pal().muted));
+                    for var in crate::naming::VARIABLES {
+                        let chip = egui::Button::new(RichText::new(var).small().monospace()).small();
+                        if ui.add(chip).on_hover_text(crate::naming::describe(var)).clicked() {
+                            let len = c.filename_pattern.chars().count();
+                            let at = ui.ctx().data(|d| d.get_temp::<usize>(cursor_id)).unwrap_or(len).min(len);
+                            let byte = c.filename_pattern.char_indices().nth(at).map_or(c.filename_pattern.len(), |(i, _)| i);
+                            c.filename_pattern.insert_str(byte, var);
+                            let after = at + var.chars().count();
+                            ui.ctx().data_mut(|d| d.insert_temp(cursor_id, after));
+                            if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), edit_id) {
+                                let cursor = egui::text::CCursor::new(after);
+                                state.cursor.set_char_range(Some(egui::text::CCursorRange::one(cursor)));
+                                state.store(ui.ctx(), edit_id);
+                            }
+                            ui.ctx().memory_mut(|m| m.request_focus(edit_id));
+                        }
+                    }
+                });
+                // An example with a made-up capture, as a path inside the output folder.
+                let sample = crate::naming::Meta {
+                    app: Some("chrome".into()),
+                    mode: Some("region".into()),
+                    width: 1280,
+                    height: 720,
+                };
+                let preview = c.next_output_path_for(&sample);
+                let shown = preview.strip_prefix(&c.output_dir).unwrap_or(&preview).display().to_string();
+                ui.label(RichText::new(tf("e.g. {0}", &[&shown])).color(pal().text).monospace().small());
             });
             ui.end_row();
             ui.label(t("Format"));
@@ -837,7 +882,7 @@ impl SettingsApp {
                 }
                 if ui.button(t("Open")).clicked() {
                     std::fs::create_dir_all(&r.output_dir).ok();
-                    platform::open_folder(&r.output_dir);
+                    platform::open_folder_newest(&r.output_dir);
                 }
             });
             ui.end_row();

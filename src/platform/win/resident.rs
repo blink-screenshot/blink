@@ -14,6 +14,7 @@ use crate::capture_bar::Mode;
 use crate::config::{config_path, Config, Hotkey, HotkeyState, HotkeyStatus, HotkeyStatusEntry};
 use crate::i18n::{t, tf};
 use crate::imageio::{self, Pointer};
+use crate::naming::Meta;
 use crate::ocr::{self, OcrError};
 use crate::toast_xml::Button;
 use core::ffi::c_void;
@@ -157,6 +158,8 @@ thread_local! {
     /// Where on the screen that screenshot was taken (its top left, physical pixels), so
     /// "Pin" can put it back on that spot.
     static BALLOON_ORIGIN: Cell<Option<(i32, i32)>> = const { Cell::new(None) };
+    /// What the file name may say about that screenshot (`{app}`, `{mode}`).
+    static BALLOON_META: RefCell<Meta> = RefCell::new(Meta::default());
     /// The toast with the Edit / Save buttons that is on screen (or in the notification
     /// center), with its number. Presses of any other toast are stale and ignored.
     static CAPTURE_TOAST: RefCell<Option<(u32, ToastNotification)>> = const { RefCell::new(None) };
@@ -489,6 +492,7 @@ fn hide_capture_toast() {
 
 fn discard_balloon_image() {
     BALLOON_ORIGIN.with(|c| c.set(None));
+    BALLOON_META.with(|c| *c.borrow_mut() = Meta::default());
     if let Some(path) = BALLOON_IMAGE.with(|c| c.borrow_mut().take()) {
         std::fs::remove_file(path).ok();
     }
@@ -1036,6 +1040,14 @@ pub(super) fn spawn_self(args: &[&str]) {
     }
 }
 
+/// `spawn_self` with what is known about the capture, for the file name.
+fn spawn_with(args: &[&str], meta: &Meta) {
+    let extra = meta.to_args();
+    let mut all: Vec<&str> = args.to_vec();
+    all.extend(extra.iter().map(String::as_str));
+    spawn_self(&all);
+}
+
 fn monitor_under_cursor() -> IRect {
     monitor_at(cursor_pos()).map(|(m, _, _)| IRect::from_rect(m)).unwrap_or_else(virtual_screen)
 }
@@ -1052,9 +1064,12 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
     let pointer = if c.capture_pointer && !menu_was_open { grab_pointer() } else { None };
     // The screen rectangle the screenshot shows, to place the pointer in it.
     let mut shown: Option<IRect> = None;
+    // What the file name may say about it (`{app}`, `{mode}`).
+    let mut meta = Meta::default();
     let img: Option<RgbaImage> = match action {
         Action::Region | Action::Scrolling | Action::Text | Action::Record => {
             let windows = top_level_windows();
+            let list = windows.clone();
             let mode = match action {
                 Action::Scrolling => Mode::Scroll,
                 Action::Text => Mode::Text,
@@ -1088,10 +1103,15 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
                         }
                         Some(out) if out.scroll => {
                             drop(shot);
+                            meta.app = super::capture::app_at(out.rect, &list).0;
+                            meta.mode = Some("scroll".into());
                             std::thread::sleep(Duration::from_millis(120));
                             scroll::capture(out.rect, &c)
                         }
                         Some(out) => {
+                            let (app, window) = super::capture::app_at(out.rect, &list);
+                            meta.app = app;
+                            meta.mode = Some(if window { "window" } else { "region" }.into());
                             shown = Some(out.rect.intersect(&shot.rect));
                             shot.crop_rgba(out.rect)
                         }
@@ -1102,16 +1122,22 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
             }
         }
         Action::Fullscreen => {
+            meta.app = target_app_window().and_then(super::capture::app_of);
+            meta.mode = Some("screen".into());
             let r = monitor_under_cursor();
             shown = Some(r);
             grab_rgba(r, c.hdr_screenshots)
         }
         Action::AllScreens => {
+            meta.app = target_app_window().and_then(super::capture::app_of);
+            meta.mode = Some("screens".into());
             shown = Some(virtual_screen());
             grab_rgba(virtual_screen(), c.hdr_screenshots)
         }
         Action::ActiveWindow => {
             let target = target_app_window();
+            meta.app = target.and_then(super::capture::app_of);
+            meta.mode = Some("window".into());
             if let Some(w) = target {
                 let fg = unsafe { GetForegroundWindow() };
                 if app_window(fg) != Some(w) {
@@ -1135,14 +1161,15 @@ fn capture(hwnd: HWND, action: Action, menu_was_open: bool) {
             let p = Pointer { img: p, x: x - r.x, y: y - r.y };
             p.overlaps(img.width(), img.height()).then_some(p)
         });
-        deliver(hwnd, img, pointer, shown.map(|r| (r.x, r.y)), &c);
+        let meta = meta.sized(img.width(), img.height());
+        deliver(hwnd, img, pointer, shown.map(|r| (r.x, r.y)), meta, &c);
     }
     BUSY.with(|b| b.set(false));
 }
 
 /// What happens with a new screenshot. `at`: where on the screen it was taken (its top
 /// left, physical pixels), for a pin.
-fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, at: Option<(i32, i32)>, c: &Config) {
+fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, at: Option<(i32, i32)>, meta: Meta, c: &Config) {
     if c.after_capture_ask {
         let Some(choice) = (unsafe { ask_after_capture(hwnd, &img) }) else { return };
         let chosen = Config {
@@ -1153,7 +1180,7 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, at: Option<(i32
             after_capture_pin: choice == AfterCapture::Pin,
             ..c.clone()
         };
-        return deliver(hwnd, img, pointer, at, &chosen);
+        return deliver(hwnd, img, pointer, at, meta, &chosen);
     }
     // Copy and Save get the pointer drawn in; the editor gets it as a separate object.
     // Shared with the history thread instead of copied for it (a full screen at 4K is 33 MB).
@@ -1184,7 +1211,7 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, at: Option<(i32
         }
     }
     if c.after_capture_save {
-        let path = c.next_output_path();
+        let path = c.next_output_path_for(&meta);
         match imageio::save_image(&path, out, c.format, c.jpg_quality) {
             Ok(()) => {
                 lines.push(tf("Saved as {0}", &[&path.display()]));
@@ -1198,7 +1225,7 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, at: Option<(i32
     }
     let mut pinned = false;
     if c.after_capture_pin {
-        match super::pin::open(out, at) {
+        match super::pin::open(out, at, &meta) {
             Ok(()) => pinned = true,
             Err(e) => {
                 lines.push(tf("Could not pin it: {0}", &[&e]));
@@ -1216,7 +1243,7 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, at: Option<(i32
     }
     if open {
         match raw {
-            Ok(()) => spawn_self(&["--edit-raw", &path.display().to_string()]),
+            Ok(()) => spawn_with(&["--edit-raw", &path.display().to_string()], &meta),
             Err(e) => {
                 std::fs::remove_file(&path).ok();
                 balloon(hwnd, t("Screenshot taken"), &tf("Could not open the editor: {0}", &[&e]), true);
@@ -1238,6 +1265,7 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, at: Option<(i32
     if show_capture_toast(hwnd, title, &lines.join("\n"), saved, pinned) {
         BALLOON_IMAGE.with(|c| *c.borrow_mut() = Some(path));
         BALLOON_ORIGIN.with(|c| c.set(at));
+        BALLOON_META.with(|c| *c.borrow_mut() = meta);
         return;
     }
     // No toast possible: the balloon can only be clicked, which opens the editor.
@@ -1246,6 +1274,7 @@ fn deliver(hwnd: HWND, img: RgbaImage, pointer: Option<Pointer>, at: Option<(i32
     balloon(hwnd, title, &lines.join("\n"), warning);
     BALLOON_CLICK.with(|c| c.set(Some(Action::EditCapture)));
     BALLOON_IMAGE.with(|c| *c.borrow_mut() = Some(path));
+    BALLOON_META.with(|c| *c.borrow_mut() = meta);
 }
 
 /// Text mode: puts the text on the clipboard and says so with its first words. The capture
@@ -1355,8 +1384,12 @@ fn save_capture(hwnd: HWND) {
     // Taken first: showing a notification discards the screenshot that is still in there.
     let Some(path) = BALLOON_IMAGE.with(|c| c.borrow_mut().take()) else { return };
     let c = cfg();
+    let meta = BALLOON_META.with(|m| m.borrow().clone());
     let result = imageio::read_capture_flat(&path).map_err(|e| e.to_string()).and_then(|img| {
-        let out = c.next_output_path();
+        let out = c.next_output_path_for(&meta);
+        if let Some(dir) = out.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
         imageio::save_image(&out, &img, c.format, c.jpg_quality).map(|()| out)
     });
     match result {
@@ -1373,21 +1406,24 @@ fn save_capture(hwnd: HWND) {
 
 /// Pins the screenshot in a raw file (deleted once read) to the screen. `at`: where the
 /// screenshot was taken, so the pin covers that spot.
-fn pin_file(hwnd: HWND, path: &std::path::Path, at: Option<(i32, i32)>) {
+fn pin_file(hwnd: HWND, path: &std::path::Path, at: Option<(i32, i32)>, meta: &Meta) {
     let img = imageio::read_capture_flat(path).map_err(|e| e.to_string());
     std::fs::remove_file(path).ok();
-    if let Err(e) = img.and_then(|img| super::pin::open(&img, at)) {
+    if let Err(e) = img.and_then(|img| super::pin::open(&img, at, meta)) {
         balloon(hwnd, t("Screenshot not pinned"), &tf("Could not pin it: {0}", &[&e]), true);
     }
 }
 
-/// A pin asked for by another Blink process (the editor): `"x;y;path"` or `";;path"`.
+/// A pin asked for by another Blink process (the editor): `"x;y;app;mode;path"`, with
+/// empty parts for what is not known.
 fn pin_request(hwnd: HWND, text: &str) {
-    let mut parts = text.splitn(3, ';');
-    let (x, y, path) = (parts.next(), parts.next(), parts.next());
+    let mut parts = text.splitn(5, ';');
+    let (x, y, app, mode, path) = (parts.next(), parts.next(), parts.next(), parts.next(), parts.next());
     let at = x.zip(y).and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)));
+    let some = |s: Option<&str>| s.filter(|s| !s.is_empty()).map(str::to_string);
+    let meta = Meta { app: some(app), mode: some(mode), ..Meta::default() };
     if let Some(path) = path.filter(|p| !p.is_empty()) {
-        pin_file(hwnd, std::path::Path::new(path), at);
+        pin_file(hwnd, std::path::Path::new(path), at, &meta);
     }
 }
 
@@ -1595,15 +1631,16 @@ fn run_action(hwnd: HWND, action: Action, from_menu: bool) {
         Action::OpenFolder => {
             let dir = cfg().output_dir;
             std::fs::create_dir_all(&dir).ok();
-            super::open_folder(&dir);
+            super::open_folder_newest(&dir);
         }
         Action::Settings => spawn_self(&["--settings"]),
         Action::WhatsNew => spawn_self(&["--settings", "whats-new"]),
         Action::Update => spawn_self(&["--update"]),
         Action::EditCapture => {
             // The editor deletes the file once it has read it.
+            let meta = BALLOON_META.with(|m| m.borrow().clone());
             if let Some(path) = BALLOON_IMAGE.with(|c| c.borrow_mut().take()) {
-                spawn_self(&["--edit-raw", &path.display().to_string()]);
+                spawn_with(&["--edit-raw", &path.display().to_string()], &meta);
             }
             hide_capture_toast();
         }
@@ -1611,9 +1648,10 @@ fn run_action(hwnd: HWND, action: Action, from_menu: bool) {
         Action::PinCapture => {
             // Right here, in this process: a pin has to appear at once.
             let at = BALLOON_ORIGIN.with(|c| c.take());
+            let meta = BALLOON_META.with(|m| m.borrow().clone());
             hide_capture_toast();
             if let Some(path) = BALLOON_IMAGE.with(|c| c.borrow_mut().take()) {
-                pin_file(hwnd, &path, at);
+                pin_file(hwnd, &path, at, &meta);
             }
         }
         Action::HistoryItem => {
@@ -1624,8 +1662,9 @@ fn run_action(hwnd: HWND, action: Action, from_menu: bool) {
         Action::SaveCaptureAs => {
             // A separate process shows the file dialog, so the tray keeps answering hotkeys.
             // It deletes the file when it is done with it.
+            let meta = BALLOON_META.with(|m| m.borrow().clone());
             if let Some(path) = BALLOON_IMAGE.with(|c| c.borrow_mut().take()) {
-                spawn_self(&["--save-raw-as", &path.display().to_string()]);
+                spawn_with(&["--save-raw-as", &path.display().to_string()], &meta);
             }
             hide_capture_toast();
         }

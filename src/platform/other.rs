@@ -39,8 +39,12 @@ pub fn place_pin_window(_hwnd: isize, _at: Option<(i32, i32)>, _bar_px: i32) {}
 pub fn set_window_opacity(_hwnd: isize, _alpha: u8) {}
 
 /// There is no tray to show pins on other systems.
-pub fn pin_in_resident(_path: &std::path::Path, _at: Option<(i32, i32)>) -> bool {
+pub fn pin_in_resident(_path: &std::path::Path, _at: Option<(i32, i32)>, _meta: &crate::naming::Meta) -> bool {
     false
+}
+
+pub fn open_folder_newest(dir: &std::path::Path) {
+    open_folder(dir);
 }
 
 pub fn open_folder(path: &std::path::Path) {

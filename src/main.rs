@@ -20,6 +20,7 @@ mod i18n_fr;
 mod i18n_nl;
 mod i18n_pt;
 mod imageio;
+mod naming;
 mod ocr;
 mod pin_bar;
 mod pin_ui;
@@ -52,8 +53,9 @@ fn main() {
                 let path = PathBuf::from(p);
                 let shot = imageio::read_capture(&path).map_err(|e| e.to_string());
                 std::fs::remove_file(&path).ok();
-                let select_text = arg(2) == Some("--select-text");
-                shot.and_then(|(img, pointer)| editor::run_with(img, pointer, None, select_text))
+                let select_text = args.iter().any(|a| a == "--select-text");
+                let meta = naming::Meta::from_args(&args);
+                shot.and_then(|(img, pointer)| editor::run_with(img, pointer, None, select_text, meta))
             }
             None => Err(i18n::t("Missing file path.").into()),
         },
@@ -64,17 +66,18 @@ fn main() {
                 let path = PathBuf::from(p);
                 let at = arg(2).zip(arg(3)).and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)));
                 // The tray shows pins itself, at once; this window is for when it is not running.
-                if platform::pin_in_resident(&path, at) {
+                if platform::pin_in_resident(&path, at, &naming::Meta::from_args(&args)) {
                     return;
                 }
                 let img = imageio::read_capture_flat(&path).map_err(|e| e.to_string());
                 std::fs::remove_file(&path).ok();
-                img.and_then(|img| pin_ui::run(img, at))
+                img.and_then(|img| pin_ui::run(img, at, naming::Meta::from_args(&args)))
             }
             None => Err(i18n::t("Missing file path.").into()),
         },
         Some("--pin") => match arg(1) {
-            Some(p) => imageio::load_image_file(std::path::Path::new(p)).and_then(|img| pin_ui::run(img, None)),
+            Some(p) => imageio::load_image_file(std::path::Path::new(p))
+                .and_then(|img| pin_ui::run(img, None, naming::Meta::default())),
             None => Err(i18n::t("Missing file path.").into()),
         },
         Some("--open") => match arg(1) {
@@ -105,7 +108,10 @@ fn main() {
                 let c = config::Config::load();
                 let result = match imageio::read_capture_flat(&raw) {
                     Err(e) => Err(e.to_string()),
-                    Ok(img) => match imageio::ask_save_path(&c) {
+                    Ok(img) => match imageio::ask_save_path(
+                        &c,
+                        &naming::Meta::from_args(&args).sized(img.width(), img.height()),
+                    ) {
                         None => Ok(()),
                         Some(out) => {
                             let fmt = imageio::format_from_path(&out, c.format);

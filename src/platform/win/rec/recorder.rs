@@ -964,6 +964,10 @@ pub fn save(
     let s = &spec.settings;
     std::fs::create_dir_all(&s.output_dir).map_err(|e| e.to_string())?;
     let path = crate::config::next_free_path(&s.output_dir, &spec.filename_pattern, format.ext());
+    // The pattern may put it in a folder of its own.
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     let overlays = Overlays {
         pointer: true,
         pointer_highlight: s.pointer_highlight,

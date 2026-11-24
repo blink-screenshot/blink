@@ -128,6 +128,7 @@ mod tests {
         ("pin_bar.rs", include_str!("pin_bar.rs")),
         ("platform/win/pin.rs", include_str!("platform/win/pin.rs")),
         ("table.rs", include_str!("table.rs")),
+        ("naming.rs", include_str!("naming.rs")),
         ("rec/mod.rs", include_str!("rec/mod.rs")),
         ("rec/bar.rs", include_str!("rec/bar.rs")),
         ("rec/keys.rs", include_str!("rec/keys.rs")),

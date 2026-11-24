@@ -337,6 +337,10 @@ impl ClipApp {
             let Some(path) = picked else { return };
             path
         } else {
+            // The pattern may put it in a folder of its own.
+            if let Some(parent) = suggested.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
             suggested
         };
         let progress = Arc::new(AtomicU32::new(0));
