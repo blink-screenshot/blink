@@ -2,9 +2,18 @@
 //! Kept free of any Windows API so it can be tested anywhere.
 
 pub struct Button<'a> {
+    /// What the button shows: a word, or a symbol (with `tip` saying what it does).
     pub label: &'a str,
     /// Sent back to Blink when the button is pressed.
     pub action: u32,
+    /// Shown on hover and read by screen readers, for a button that only shows a symbol.
+    pub tip: Option<&'a str>,
+}
+
+impl<'a> Button<'a> {
+    pub fn new(label: &'a str, action: u32) -> Self {
+        Self { label, action, tip: None }
+    }
 }
 
 fn escape(s: &str) -> String {
@@ -49,8 +58,9 @@ pub fn toast(token: u32, title: &str, body: &str, click_action: u32, buttons: &[
     if !buttons.is_empty() {
         xml.push_str("<actions>");
         for b in buttons {
+            let tip = b.tip.map(|t| format!(r#" hint-toolTip="{}""#, escape(t))).unwrap_or_default();
             xml.push_str(&format!(
-                r#"<action content="{}" arguments="{}" activationType="foreground"/>"#,
+                r#"<action content="{}" arguments="{}" activationType="foreground"{tip}/>"#,
                 escape(b.label),
                 escape(&arguments(token, b.action)),
             ));
@@ -79,12 +89,19 @@ mod tests {
             "Saved",
             r#"C:\Pictures\A & B <1>"#,
             1,
-            &[Button { label: "Open in editor", action: 1 }, Button { label: "Save", action: 2 }],
+            &[
+                Button::new("Open in editor", 1),
+                Button::new("Save", 2),
+                Button { label: "\u{1F4CC}", action: 3, tip: Some("Pin") },
+            ],
         );
         assert!(xml.contains(r#"launch="4;1""#));
         assert!(xml.contains("C:\\Pictures\\A &amp; B &lt;1&gt;"));
         assert!(xml.contains(r#"<action content="Open in editor" arguments="4;1" activationType="foreground"/>"#));
         assert!(xml.contains(r#"<action content="Save" arguments="4;2" activationType="foreground"/>"#));
+        assert!(xml.contains(
+            "<action content=\"\u{1F4CC}\" arguments=\"4;3\" activationType=\"foreground\" hint-toolTip=\"Pin\"/>"
+        ));
     }
 
     #[test]

@@ -89,117 +89,203 @@ fn semibold() -> FontFamily {
 
 // ---- toolbar ------------------------------------------------------------------------------
 
+/// A group of buttons in the toolbar's left part: a run of tools, or Background / Mockup.
+#[derive(Clone, Copy)]
+enum ToolGroup {
+    Tools(usize, usize),
+    Frame,
+}
+
+/// The groups of the toolbar's left part, in order.
+fn tool_groups() -> Vec<ToolGroup> {
+    let all = Tool::ALL;
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < all.len() {
+        let group = all[i].group();
+        let mut j = i;
+        while j < all.len() && all[j].group() == group {
+            j += 1;
+        }
+        out.push(ToolGroup::Tools(i, j));
+        i = j;
+    }
+    out.push(ToolGroup::Frame);
+    out
+}
+
+/// Splits groups of these widths into rows of at most `max` wide (`gap` between groups);
+/// a group wider than `max` gets a row of its own. Returns the number of groups per row.
+fn pack_rows(widths: &[f32], max: f32, gap: f32) -> Vec<usize> {
+    let mut rows = Vec::new();
+    let (mut n, mut used) = (0usize, 0.0f32);
+    for &w in widths {
+        let need = if n == 0 { w } else { used + gap + w };
+        if n > 0 && need > max {
+            rows.push(n);
+            n = 1;
+            used = w;
+        } else {
+            n += 1;
+            used = need;
+        }
+    }
+    if n > 0 {
+        rows.push(n);
+    }
+    rows
+}
+
+/// Draws one group of the toolbar's left part; returns its outer rectangle.
+fn tool_group(ui: &mut Ui, app: &mut EditorApp, group: ToolGroup, labels: bool, wide: bool) -> Rect {
+    match group {
+        ToolGroup::Tools(i, j) => capsule(ui, |ui| {
+            for &tool in &Tool::ALL[i..j] {
+                let mut tip = format!("{}  ({})", tool.name(), tool.key().name());
+                if tool == Tool::Select {
+                    tip.push('\n');
+                    tip.push_str(t("Hold Ctrl to use it temporarily with any tool."));
+                }
+                // While Ctrl is held the mouse acts as Select: show that with an outline.
+                let temporary = app.ctrl_select && tool == Tool::Select && app.tool != Tool::Select;
+                let label = labels.then(|| tool.short_name());
+                let resp =
+                    icon_button(ui, app.tool == tool, label, tool.name(), |p, r, c| draw_tool_icon(p, r, tool, c));
+                if temporary {
+                    ui.painter().rect_stroke(
+                        resp.rect,
+                        BUTTON_RADIUS,
+                        Stroke::new(1.5_f32, ACCENT),
+                        StrokeKind::Inside,
+                    );
+                }
+                if resp.on_hover_text(tip).clicked() {
+                    app.set_tool(tool);
+                }
+            }
+        }),
+        ToolGroup::Frame => capsule(ui, |ui| {
+            let bg_on = app.frame.background_on;
+            let bg_label = (wide || labels).then(|| t("Background"));
+            if labeled_button(ui, bg_on, bg_label, labels, t("Background"), draw_background_icon)
+                .on_hover_text(t("Background: put the screenshot on a gradient with rounded corners"))
+                .clicked()
+            {
+                app.frame.background_on = !bg_on;
+                app.zoom = None;
+                app.invalidate();
+            }
+            let mock_on = app.frame.mockup_on;
+            let mock_label = (wide || labels).then(|| t("Mockup"));
+            if labeled_button(ui, mock_on, mock_label, labels, t("Device mockup"), draw_mockup_icon)
+                .on_hover_text(t("Device mockup: show the screenshot on a phone, laptop, monitor or browser"))
+                .clicked()
+            {
+                app.frame.mockup_on = !mock_on;
+                app.zoom = None;
+                app.invalidate();
+            }
+        }),
+    }
+}
+
+/// The height of a toolbar row: a capsule with its buttons.
+fn toolbar_row_height(labels: bool) -> f32 {
+    let button = if labels { 46.0 } else { 32.0 };
+    button + 2.0 * CAPSULE_MARGIN as f32 + 2.0
+}
+
 pub fn toolbar(app: &mut EditorApp, ctx: &egui::Context) {
     let labels = app.config.show_tool_labels;
     egui::TopBottomPanel::top("toolbar")
         .frame(egui::Frame::NONE.fill(pal().panel).inner_margin(Margin::symmetric(10, 7)))
         .show_separator_line(false)
         .show(ctx, |ui| {
-            ui.horizontal_top(|ui| {
-                // The tools get what the buttons on the right leave over, and wrap onto a second
-                // row in a narrow window instead of running under those buttons.
-                // The width of the buttons is measured (previous frame), so a longer translation or
-                // the "Copied" label cannot make them run over the tools.
-                let right_id = egui::Id::new("toolbar_right_width");
-                let right = ctx.data(|d| d.get_temp::<f32>(right_id)).unwrap_or(380.0) + 12.0;
-                let left_w = (ui.available_width() - right).max(120.0);
-                // Room for the text labels of Background / Mockup next to the tools.
-                let wide = left_w > if labels { 1000.0 } else { 820.0 };
-                ui.allocate_ui_with_layout(
-                    vec2(left_w, 32.0),
-                    Layout::left_to_right(Align::Center).with_main_wrap(true),
+            const GAP: f32 = 3.0;
+            const ROW_GAP: f32 = 4.0;
+            let row_h = toolbar_row_height(labels);
+            let origin = ui.cursor().min;
+            let full = ui.available_width();
+            // The tools get what the buttons on the right leave over, and wrap onto more rows in
+            // a narrow window instead of running under those buttons. Widths are measured (the
+            // previous frame), so a longer translation or the "Copied" label cannot make the
+            // buttons run over the tools. egui does not wrap groups by itself, so the rows are
+            // laid out here, each exactly one capsule high so every group lines up.
+            let right_id = egui::Id::new("toolbar_right_width");
+            let right = ctx.data(|d| d.get_temp::<f32>(right_id)).unwrap_or(380.0) + 12.0;
+            let left_w = (full - right).max(120.0);
+            // Room for the text labels of Background / Mockup next to the tools.
+            let wide = left_w > if labels { 1000.0 } else { 820.0 };
+            let groups = tool_groups();
+            let width_id = |i: usize| egui::Id::new(("toolbar_group_width", i, labels, wide));
+            let widths: Vec<f32> = groups
+                .iter()
+                .enumerate()
+                .map(|(i, g)| {
+                    let guess = match g {
+                        ToolGroup::Tools(a, b) => (b - a) as f32 * 36.0 + 8.0,
+                        ToolGroup::Frame => 200.0,
+                    };
+                    ctx.data(|d| d.get_temp::<f32>(width_id(i))).unwrap_or(guess)
+                })
+                .collect();
+            let rows = pack_rows(&widths, left_w, GAP);
+            let mut next = 0;
+            let mut changed = false;
+            for (r, &n) in rows.iter().enumerate() {
+                let rect =
+                    Rect::from_min_size(pos2(origin.x, origin.y + r as f32 * (row_h + ROW_GAP)), vec2(left_w, row_h));
+                ui.allocate_new_ui(
+                    egui::UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)),
                     |ui| {
-                        ui.spacing_mut().item_spacing = vec2(3.0, 4.0);
-                        // One rounded capsule per group of related tools.
-                        let all = Tool::ALL;
-                        let mut i = 0;
-                        while i < all.len() {
-                            let group = all[i].group();
-                            let mut j = i;
-                            while j < all.len() && all[j].group() == group {
-                                j += 1;
+                        ui.spacing_mut().item_spacing = vec2(GAP, 0.0);
+                        for i in next..next + n {
+                            let w = tool_group(ui, app, groups[i], labels, wide).width();
+                            if (w - widths[i]).abs() > 0.5 {
+                                ctx.data_mut(|d| d.insert_temp(width_id(i), w));
+                                changed = true;
                             }
-                            let tools = &all[i..j];
-                            i = j;
-                            capsule(ui, |ui| {
-                                for &tool in tools {
-                                    let mut tip = format!("{}  ({})", tool.name(), tool.key().name());
-                                    if tool == Tool::Select {
-                                        tip.push('\n');
-                                        tip.push_str(t("Hold Ctrl to use it temporarily with any tool."));
-                                    }
-                                    // While Ctrl is held the mouse acts as Select: show that with an outline.
-                                    let temporary = app.ctrl_select && tool == Tool::Select && app.tool != Tool::Select;
-                                    let label = labels.then(|| tool.short_name());
-                                    let resp = icon_button(ui, app.tool == tool, label, tool.name(), |p, r, c| {
-                                        draw_tool_icon(p, r, tool, c)
-                                    });
-                                    if temporary {
-                                        ui.painter().rect_stroke(
-                                            resp.rect,
-                                            BUTTON_RADIUS,
-                                            Stroke::new(1.5_f32, ACCENT),
-                                            StrokeKind::Inside,
-                                        );
-                                    }
-                                    if resp.on_hover_text(tip).clicked() {
-                                        app.set_tool(tool);
-                                    }
-                                }
-                            });
                         }
-                        capsule(ui, |ui| {
-                            let bg_on = app.frame.background_on;
-                            let bg_label = (wide || labels).then(|| t("Background"));
-                            if labeled_button(ui, bg_on, bg_label, labels, t("Background"), draw_background_icon)
-                                .on_hover_text(t("Background: put the screenshot on a gradient with rounded corners"))
-                                .clicked()
-                            {
-                                app.frame.background_on = !bg_on;
-                                app.zoom = None;
-                                app.invalidate();
-                            }
-                            let mock_on = app.frame.mockup_on;
-                            let mock_label = (wide || labels).then(|| t("Mockup"));
-                            if labeled_button(ui, mock_on, mock_label, labels, t("Device mockup"), draw_mockup_icon)
-                                .on_hover_text(t(
-                                    "Device mockup: show the screenshot on a phone, laptop, monitor or browser",
-                                ))
-                                .clicked()
-                            {
-                                app.frame.mockup_on = !mock_on;
-                                app.zoom = None;
-                                app.invalidate();
-                            }
-                        });
                     },
                 );
-                ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                next += n;
+            }
+
+            // The buttons on the right, on the first row, centred like the groups.
+            let right_rect = Rect::from_min_size(origin, vec2(full, row_h));
+            ui.allocate_new_ui(
+                egui::UiBuilder::new().max_rect(right_rect).layout(Layout::right_to_left(Align::Center)),
+                |ui| {
                     let start_x = ui.max_rect().right();
                     ui.spacing_mut().item_spacing.x = 6.0;
+                    // Text buttons as high as the tool buttons.
+                    let h = 32.0;
                     // The most used action: say clearly that it worked.
                     let copy_text =
                         if app.just_copied() { format!("\u{2714} {}", t("Copied")) } else { t("Copy").to_string() };
                     let copy = ui.add(
                         egui::Button::new(RichText::new(copy_text).color(ON_ACCENT).strong())
                             .fill(ACCENT)
-                            .min_size(vec2(84.0, 0.0)),
+                            .min_size(vec2(84.0, h)),
                     );
                     if copy.on_hover_text(t("Copy to clipboard (Ctrl+C)")).clicked() {
                         app.copy(ctx);
                     }
                     if ui
-                        .button(t("Save"))
+                        .add(egui::Button::new(t("Save")).min_size(vec2(0.0, h)))
                         .on_hover_text(tf("Save to {0} (Ctrl+S)", &[&app.config.output_dir.display()]))
                         .clicked()
                     {
                         app.save_quick(ctx);
                     }
-                    if ui.button(t("Save as...")).on_hover_text(t("Save as (Ctrl+Shift+S)")).clicked() {
+                    if ui
+                        .add(egui::Button::new(t("Save as...")).min_size(vec2(0.0, h)))
+                        .on_hover_text(t("Save as (Ctrl+Shift+S)"))
+                        .clicked()
+                    {
                         app.save_as(ctx);
                     }
-                    if ui
-                        .button(t("Pin"))
+                    if filled_icon_button(ui, vec2(36.0, h), t("Pin"), draw_pin)
                         .on_hover_text(t("Pin to the screen: keep the screenshot in view above other windows (Ctrl+P)"))
                         .clicked()
                     {
@@ -235,15 +321,55 @@ pub fn toolbar(app: &mut EditorApp, ctx: &egui::Context) {
                     let old = ctx.data(|d| d.get_temp::<f32>(right_id)).unwrap_or(0.0);
                     if (used - old).abs() > 0.5 {
                         ctx.data_mut(|d| d.insert_temp(right_id, used));
-                        ctx.request_repaint();
+                        changed = true;
                     }
-                });
-            });
+                },
+            );
+            let rows_n = rows.len().max(1) as f32;
+            let total = Rect::from_min_size(origin, vec2(full, rows_n * row_h + (rows_n - 1.0) * ROW_GAP));
+            ui.advance_cursor_after_rect(total);
+            if changed {
+                ctx.request_repaint();
+            }
         });
 }
 
+/// A button with an icon on the normal button background (next to text buttons).
+fn filled_icon_button(ui: &mut Ui, size: Vec2, name: &str, draw: impl FnOnce(&Painter, Rect, Color32)) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let visuals = ui.style().interact(&resp);
+    ui.painter().rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
+    let fg = if ui.is_enabled() { pal().text } else { pal().disabled };
+    draw(ui.painter(), Rect::from_center_size(rect.center(), vec2(18.0, 18.0)), fg);
+    accessible(ui, &resp, name, false);
+    resp
+}
+
+/// A push pin (like Lucide's "pin"): the cap, the body widening into its base, the needle.
+pub fn draw_pin(p: &Painter, r: Rect, c: Color32) {
+    let g = grid(r.expand(2.0));
+    let w = r.width() / 10.0;
+    round_line(p, vec![g(7.5, 3.0), g(16.5, 3.0)], w, c);
+    round_line(
+        p,
+        vec![
+            g(9.0, 3.0),
+            g(9.0, 10.0),
+            g(5.5, 13.5),
+            g(5.5, 16.5),
+            g(18.5, 16.5),
+            g(18.5, 13.5),
+            g(15.0, 10.0),
+            g(15.0, 3.0),
+        ],
+        w,
+        c,
+    );
+    round_line(p, vec![g(12.0, 16.5), g(12.0, 21.5)], w, c);
+}
+
 /// A rounded capsule around a row of related buttons.
-fn capsule(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+fn capsule(ui: &mut Ui, add: impl FnOnce(&mut Ui)) -> Rect {
     egui::Frame::NONE
         .fill(pal().panel_raised)
         .stroke(Stroke::new(1.0_f32, pal().border.gamma_multiply(0.5)))
@@ -254,7 +380,9 @@ fn capsule(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 add(ui);
             });
-        });
+        })
+        .response
+        .rect
 }
 
 fn accent_button(ui: &mut Ui, text: &str) -> Response {
@@ -419,7 +547,18 @@ fn draw_tool_icon(p: &Painter, r: Rect, tool: Tool, c: Color32) {
                 at(0.28, 0.98),
                 r.height() * 0.16,
             );
-            p.add(Shape::closed_line(pts, Stroke::new(1.6_f32, c)));
+            // Points that (nearly) coincide make egui draw a long miter spike at some sub-pixel
+            // positions: leave them out.
+            let mut clean: Vec<Pos2> = Vec::with_capacity(pts.len());
+            for q in pts {
+                if clean.last().is_none_or(|l: &Pos2| l.distance(q) > 0.05) {
+                    clean.push(q);
+                }
+            }
+            if clean.len() > 1 && clean[0].distance(clean[clean.len() - 1]) <= 0.05 {
+                clean.pop();
+            }
+            p.add(Shape::closed_line(clean, Stroke::new(1.6_f32, c)));
             round_line(p, vec![at(0.22, 0.3), at(0.78, 0.3)], 1.4, c);
             round_line(p, vec![at(0.22, 0.46), at(0.6, 0.46)], 1.4, c);
         }
@@ -1391,4 +1530,29 @@ pub fn brand_header(ui: &mut Ui, logo: &egui::TextureHandle, title: &str, subtit
             ui.label(RichText::new(subtitle).color(pal().muted));
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toolbar_groups_wrap_into_rows_that_fit() {
+        let widths = [80.0, 180.0, 70.0, 140.0, 40.0, 40.0, 200.0];
+        // Everything on one row when there is room.
+        assert_eq!(pack_rows(&widths, 2000.0, 3.0), vec![7]);
+        // Each row fits; a group never spills past the edge.
+        for max in [300.0, 420.0, 600.0] {
+            let rows = pack_rows(&widths, max, 3.0);
+            assert_eq!(rows.iter().sum::<usize>(), widths.len());
+            let mut i = 0;
+            for n in rows {
+                let used: f32 = widths[i..i + n].iter().sum::<f32>() + (n - 1) as f32 * 3.0;
+                assert!(used <= max || n == 1, "{max}: {used}");
+                i += n;
+            }
+        }
+        // A group wider than the room gets a row of its own.
+        assert_eq!(pack_rows(&[50.0, 500.0, 50.0], 200.0, 3.0), vec![1, 1, 1]);
+    }
 }

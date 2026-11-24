@@ -125,6 +125,8 @@ mod tests {
         ("history.rs", include_str!("history.rs")),
         ("clip_ui.rs", include_str!("clip_ui.rs")),
         ("pin_ui.rs", include_str!("pin_ui.rs")),
+        ("pin_bar.rs", include_str!("pin_bar.rs")),
+        ("platform/win/pin.rs", include_str!("platform/win/pin.rs")),
         ("table.rs", include_str!("table.rs")),
         ("rec/mod.rs", include_str!("rec/mod.rs")),
         ("rec/bar.rs", include_str!("rec/bar.rs")),
