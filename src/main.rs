@@ -20,6 +20,7 @@ mod i18n_es;
 mod i18n_fr;
 mod i18n_nl;
 mod i18n_pt;
+mod i18n_tr;
 mod imageio;
 mod naming;
 mod ocr;
