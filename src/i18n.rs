@@ -1,4 +1,4 @@
-//! Interface language: English (the default), Dutch, German, French, Spanish and Portuguese.
+//! Interface language: English (the default), Dutch, German, French, Spanish, Portuguese and Turkish.
 //!
 //! The English text is the key: `t("Copy")` returns the text in the current language, and
 //! falls back to the English when a translation is missing. Placeholders are `{0}`, `{1}`,
@@ -20,18 +20,20 @@ pub enum Language {
     French,
     Spanish,
     Portuguese,
+    Turkish,
 }
 
 type Table = &'static [(&'static str, &'static str)];
 
 impl Language {
-    pub const ALL: [Language; 6] = [
+    pub const ALL: [Language; 7] = [
         Language::English,
         Language::Dutch,
         Language::German,
         Language::French,
         Language::Spanish,
         Language::Portuguese,
+        Language::Turkish,
     ];
     /// The language's own name (shown untranslated, so you can always find yours).
     pub fn native_name(self) -> &'static str {
@@ -41,6 +43,7 @@ impl Language {
             Language::German => "Deutsch",
             Language::French => "Fran\u{e7}ais",
             Language::Spanish => "Espa\u{f1}ol",
+            Language::Turkish => "Türkçe",
             Language::Portuguese => "Portugu\u{ea}s (Brasil)",
         }
     }
@@ -52,6 +55,7 @@ impl Language {
             Language::French => Some(crate::i18n_fr::FR),
             Language::Spanish => Some(crate::i18n_es::ES),
             Language::Portuguese => Some(crate::i18n_pt::PT),
+            Language::Turkish => Some(crate::i18n_tr::TR),
         }
     }
 }
